@@ -55,11 +55,10 @@ AI는 사용자의 발화를 분석해 다음과 같은 예매 조건으로 변�
 ### Frontend
 - React
 - Responsive Web UI
-- Web Speech / IBM Speech integration
+- IBM Speech integration (STT/TTS)
 
 ### Backend
-- FastAPI
-- Python
+- Node.js + Express
 - REST API
 
 ### AI
@@ -68,7 +67,7 @@ AI는 사용자의 발화를 분석해 다음과 같은 예매 조건으로 변�
 - IBM Text to Speech
 
 ### External Data
-- 고속버스 운행정보 API
+- 고속버스 운행정보 API (TAGO)
 - Mock Seat / Booking API for hackathon demonstration
 
 ## Suggested Architecture
