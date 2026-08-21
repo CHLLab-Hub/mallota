@@ -197,15 +197,13 @@ Voice Confirmation
 
 **2026 IBM End-to-End Hackathon — Team 1**
 
-팀원 정보는 아래 형식으로 추가하세요.
-
 | Name | Role | GitHub |
 |---|---|---|
-| Member 1 | Frontend | @username |
-| Member 2 | Backend | @username |
-| Member 3 | AI / watsonx | @username |
-| Member 4 | Voice / Integration | @username |
-| Member 5 | Data / UX | @username |
+| 김채민 | PM | @kcm0701-a11y |
+| 이세한 | Prompt Engineer | @leesehan231 |
+| 최재혁 | AI Engineer | @Choi Jaehyeok |
+| 이예은 | Developer | @leyen4 |
+| 노가언 | SRE | @Kakuel |
 
 ## GitHub Description
 
