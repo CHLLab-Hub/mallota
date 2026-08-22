@@ -6,19 +6,12 @@ plugins {
 
 group = 'com.malrota'
 version = '0.0.1-SNAPSHOT'
-<<<<<<< HEAD
+description = 'Voice-first accessible intercity bus booking assistant'
 
 java {
 	toolchain {
 		languageVersion = JavaLanguageVersion.of(17)
 	}
-=======
-description = 'Voice-first accessible intercity bus booking assistant'
-
-java {
-	sourceCompatibility = JavaVersion.VERSION_17
-	targetCompatibility = JavaVersion.VERSION_17
->>>>>>> 99dec8af33284acce36fc66ce94b746a2a82a005
 }
 
 repositories {
@@ -28,28 +21,21 @@ repositories {
 dependencies {
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
-<<<<<<< HEAD
+
 	compileOnly 'org.projectlombok:lombok'
 	annotationProcessor 'org.projectlombok:lombok'
+
 	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
 	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
 	testCompileOnly 'org.projectlombok:lombok'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 	testAnnotationProcessor 'org.projectlombok:lombok'
-=======
-	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
-	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
-	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
->>>>>>> 99dec8af33284acce36fc66ce94b746a2a82a005
 }
 
 tasks.named('test') {
 	useJUnitPlatform()
 }
-<<<<<<< HEAD
-=======
 
 tasks.withType(JavaCompile).configureEach {
 	options.release = 17
 }
->>>>>>> 99dec8af33284acce36fc66ce94b746a2a82a005
