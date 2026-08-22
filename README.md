@@ -58,7 +58,7 @@ cd backend
 ./gradlew bootRun
 ```
 
-기본 주소는 `http://localhost:8080`이며 상태 확인 API는 `GET /api/health`입니다.
+기본 주소는 `http://localhost:8081`이며 상태 확인 API는 `GET /api/health`입니다.
 
 ## 환경변수
 
