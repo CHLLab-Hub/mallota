@@ -3,9 +3,11 @@ spring:
     name: malrota-backend
 
 server:
-  port: ${PORT:8080}
+  port: ${PORT:8081}
 
 malrota:
+  cors:
+    allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:3000}
   integrations:
     tago:
       enabled: ${TAGO_ENABLED:false}
