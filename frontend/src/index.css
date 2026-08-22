@@ -1,0 +1,44 @@
+:root {
+  font-family:
+    Pretendard, "Noto Sans KR", "Apple SD Gothic Neo", system-ui, sans-serif;
+  color: #17231d;
+  background: #f5f8f5;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+  -webkit-font-smoothing: antialiased;
+  --color-text: #17231d;
+  --color-muted: #58665f;
+  --color-surface: #ffffff;
+  --color-primary: #7ee0a8;
+  --color-primary-dark: #176b41;
+  --color-border: #d9e3dc;
+  --color-border-strong: #93a99b;
+  --color-focus: rgb(23 107 65 / 30%);
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html {
+  min-width: 320px;
+  background:
+    radial-gradient(circle at top right, rgb(126 224 168 / 22%), transparent 34rem),
+    #f5f8f5;
+}
+
+body {
+  min-width: 320px;
+  min-height: 100vh;
+  margin: 0;
+  line-height: 1.6;
+}
+
+button,
+textarea {
+  font: inherit;
+}
+
+::selection {
+  background: rgb(126 224 168 / 55%);
+}
