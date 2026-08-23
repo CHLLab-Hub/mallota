@@ -6,7 +6,7 @@
 
 ## 기술 구성
 
-- Frontend: React, TypeScript, Vite
+- Frontend: React, TypeScript, Create React App (`react-scripts`)
 - Backend: Java 17, Spring Boot, Gradle
 - Planned integrations: TAGO, IBM watsonx.ai, IBM Speech to Text/Text to Speech
 - Booking and seat availability: MVP에서는 Mock 사용
@@ -37,10 +37,10 @@ malrota/
 cd frontend
 npm install
 copy .env.example .env.local
-npm run dev
+npm start
 ```
 
-기본 주소는 `http://localhost:5173`입니다.
+기본 주소는 `http://localhost:3000`입니다.
 
 ### Backend
 
@@ -68,6 +68,7 @@ cd backend
 - `backend/.env.example`
 
 프론트에는 비밀 키를 두지 않습니다. 외부 서비스 키는 백엔드 환경변수로만 전달합니다.
+개발 환경의 CORS 허용 출처는 기본적으로 `http://localhost:3000`이며 `CORS_ALLOWED_ORIGINS`로 변경할 수 있습니다.
 
 ## 개발 원칙
 
