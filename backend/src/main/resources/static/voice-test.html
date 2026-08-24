@@ -1,0 +1,137 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>말로타 음성 테스트</title>
+<style>
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; min-height: 100vh; display: flex; flex-direction: column;
+    align-items: center; gap: 20px; padding: 32px 20px;
+    font-family: system-ui, sans-serif; background: #0f172a; color: #f8fafc; text-align: center;
+  }
+  h1 { font-size: 1.6rem; margin: 4px 0; }
+  .sub { color: #94a3b8; font-size: 0.95rem; }
+  #status { font-size: 1.2rem; min-height: 1.6em; color: #cbd5e1; }
+  #mic {
+    width: 180px; height: 180px; border-radius: 50%; border: none;
+    font-size: 4rem; color: #fff; background: #2563eb; cursor: pointer;
+  }
+  #mic.rec { background: #dc2626; }
+  .card {
+    width: 100%; max-width: 560px; background: #1e293b; border-radius: 14px;
+    padding: 18px; text-align: left; font-size: 1.1rem; line-height: 1.6;
+  }
+  .label { color: #94a3b8; font-size: .85rem; display: block; margin-bottom: 4px; }
+  .row { margin-bottom: 14px; }
+  input[type=text] {
+    width: 100%; padding: 12px; font-size: 1rem; border-radius: 8px;
+    border: 1px solid #334155; background: #0f172a; color: #f8fafc;
+  }
+  button.sec {
+    margin-top: 8px; padding: 10px 16px; font-size: 1rem; border-radius: 8px;
+    border: none; background: #334155; color: #f8fafc; cursor: pointer;
+  }
+  .err { color: #fca5a5; }
+</style>
+</head>
+<body>
+  <h1>말로타 음성 테스트</h1>
+  <div class="sub">백엔드(8081)의 STT / TTS 동작 확인용</div>
+
+  <div id="status">버튼을 누르고 말씀하세요</div>
+  <button id="mic">🎤</button>
+
+  <div class="card">
+    <div class="row">
+      <span class="label">STT 결과 (음성 → 텍스트)</span>
+      <div id="heard">—</div>
+    </div>
+    <div class="row">
+      <span class="label">TTS 테스트 (텍스트 → 음성)</span>
+      <input type="text" id="ttsText" value="안녕하세요. 말로타입니다.">
+      <button class="sec" id="ttsBtn">음성으로 듣기</button>
+    </div>
+  </div>
+
+  <audio id="player" playsinline></audio>
+
+<script>
+let rec, chunks = [];
+const mic = document.getElementById('mic');
+const statusEl = document.getElementById('status');
+const heardEl = document.getElementById('heard');
+const player = document.getElementById('player');
+
+mic.onclick = async () => {
+  if (!rec || rec.state === 'inactive') {
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      rec = new MediaRecorder(stream);
+      chunks = [];
+      rec.ondataavailable = e => chunks.push(e.data);
+      rec.onstop = sendAudio;
+      rec.start();
+      mic.classList.add('rec');
+      statusEl.textContent = '녹음 중... 끝나면 버튼을 다시 누르세요';
+    } catch (e) {
+      statusEl.innerHTML = '<span class="err">마이크를 켤 수 없습니다: ' + e.message + '</span>';
+    }
+  } else {
+    rec.stop();
+    rec.stream.getTracks().forEach(t => t.stop());
+    mic.classList.remove('rec');
+    statusEl.textContent = '인식 중...';
+  }
+};
+
+async function sendAudio() {
+  const blob = new Blob(chunks, { type: 'audio/webm' });
+  const fd = new FormData();
+  fd.append('audio', blob, 'rec.webm');
+  try {
+    const r = await fetch('/api/voice/stt', { method: 'POST', body: fd });
+    const text = await r.text();
+    let j;
+    try { j = JSON.parse(text); } catch { j = { error: text }; }
+    if (j.transcript !== undefined) {
+      heardEl.textContent = j.transcript || '(인식된 내용 없음)';
+      statusEl.textContent = '완료. 다시 하려면 버튼을 누르세요';
+    } else {
+      heardEl.innerHTML = '<span class="err">' + (j.error || text) + '</span>';
+      statusEl.textContent = '오류 발생';
+    }
+  } catch (e) {
+    heardEl.innerHTML = '<span class="err">요청 실패: ' + e.message + '</span>';
+    statusEl.textContent = '오류 발생';
+  }
+}
+
+document.getElementById('ttsBtn').onclick = async () => {
+  const text = document.getElementById('ttsText').value.trim();
+  if (!text) return;
+  statusEl.textContent = '음성 생성 중...';
+  try {
+    const r = await fetch('/api/voice/tts', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ text })
+    });
+    const raw = await r.text();
+    let j;
+    try { j = JSON.parse(raw); } catch { j = { error: raw }; }
+    if (j.audio) {
+      player.src = 'data:audio/mp3;base64,' + j.audio;
+      player.play();
+      statusEl.textContent = '재생 중';
+    } else {
+      statusEl.innerHTML = '<span class="err">' + (j.error || raw) + '</span>';
+    }
+  } catch (e) {
+    statusEl.innerHTML = '<span class="err">요청 실패: ' + e.message + '</span>';
+  }
+};
+</script>
+</body>
+</html>
