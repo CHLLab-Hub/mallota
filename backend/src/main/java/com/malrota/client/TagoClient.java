@@ -6,6 +6,7 @@ import com.malrota.config.TagoProperties;
 import com.malrota.dto.response.BusSchedule;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
+import java.net.URI;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -28,7 +29,7 @@ public class TagoClient {
                 + "&terminalNm=" + terminalName
                 + "&numOfRows=1&pageNo=1&_type=json";
 
-        String body = restClient.get().uri(url).retrieve().body(String.class);
+        String body = restClient.get().uri(URI.create(url)).retrieve().body(String.class);
 
         try {
             JsonNode item = objectMapper.readTree(body)
@@ -52,7 +53,7 @@ public class TagoClient {
                 + "&depPlandTime=" + date
                 + "&numOfRows=30&pageNo=1&_type=json";
 
-        String body = restClient.get().uri(url).retrieve().body(String.class);
+        String body = restClient.get().uri(URI.create(url)).retrieve().body(String.class);
 
         List<BusSchedule> result = new ArrayList<>();
         try {
