@@ -44,3 +44,25 @@ export interface SeatRecommendation {
   reasons: string[]
   alternatives: Seat[]
 }
+
+export type ConversationStateValue =
+  | 'COLLECTING_CONDITIONS'
+  | 'READY_TO_SEARCH'
+  | 'BUS_SELECTED'
+  | 'SEAT_RECOMMENDED'
+  | 'AWAITING_CONFIRMATION'
+  | 'BOOKED'
+
+export interface ConversationSessionResult {
+  sessionId: string
+  state: ConversationStateValue
+  departure: string | null
+  arrival: string | null
+  date: string | null
+  timePreference: string | null
+  seatPreferences: SeatPreference[]
+  accessibilityNeeds: AccessibilityNeed[]
+  selectedBusId: string | null
+  recommendedSeatNo: string | null
+  bookingId: string | null
+}

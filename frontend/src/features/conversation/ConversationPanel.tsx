@@ -1,90 +1,149 @@
 import { useState } from 'react'
-import { searchConversation } from '../../api/conversationApi'
-import { ApiError } from '../../api/httpClient'
+import { parseConversation, searchBuses } from '../../api/conversationApi'
 import { recommendSeat } from '../../api/seatApi'
-import type { ConversationSearchResult, SeatRecommendation } from './types'
+import { speechToText } from '../../api/voiceApi'
+import { ApiError } from '../../api/httpClient'
+import { useVoiceRecorder } from './useVoiceRecorder'
+import type {
+  ConversationSessionResult,
+  BusSchedule,
+  SeatRecommendation,
+} from './types'
+
+// 빠진 필수 정보를 보고 되물을 질문 만들기
+function buildQuestion(session: ConversationSessionResult): string {
+  if (!session.departure) return '어디에서 출발하시나요?'
+  if (!session.arrival) return '어디로 가시나요?'
+  if (!session.date) return '언제 출발하시나요?'
+  return ''
+}
 
 export function ConversationPanel() {
-  const [text, setText] = useState('내일 오전 서울에서 대전 가는데 다리가 불편하고 창가가 좋아요.')
+  const [text, setText] = useState('')
+  const [sessionId, setSessionId] = useState<string | null>(null)
+  const [message, setMessage] = useState('어디로 가실 예정인지 말씀해 주세요.')
   const [loading, setLoading] = useState(false)
-  const [result, setResult] = useState<ConversationSearchResult | null>(null)
-  const [seat, setSeat] = useState<SeatRecommendation | null>(null)
+  const [transcribing, setTranscribing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const [bus, setBus] = useState<BusSchedule | null>(null)
+  const [seat, setSeat] = useState<SeatRecommendation | null>(null)
 
-  async function handleSearch() {
+  const { recording, startRecording, stopRecording } = useVoiceRecorder()
+
+  async function handleMicClick() {
+    if (recording) {
+      setTranscribing(true)
+      setError(null)
+      try {
+        const audio = await stopRecording()
+        const data = await speechToText(audio)
+        setText(data.transcript)
+      } catch (e) {
+        setError('음성 인식에 실패했습니다. 다시 시도해 주세요.')
+      } finally {
+        setTranscribing(false)
+      }
+    } else {
+      setError(null)
+      try {
+        await startRecording()
+      } catch (e) {
+        setError('마이크를 사용할 수 없습니다. 권한을 확인해 주세요.')
+      }
+    }
+  }
+
+  async function handleSend() {
+    if (!text.trim()) return
     setLoading(true)
     setError(null)
-    setResult(null)
-    setSeat(null)
     try {
-      // 1. 조건 추출 + 버스 조회
-      const data: ConversationSearchResult = await searchConversation(text)
-      setResult(data)
+      // 1. 대화 파싱 (조건 누적)
+      const session: ConversationSessionResult = await parseConversation(text, sessionId)
+      setSessionId(session.sessionId) // 세션 유지
+      setText('') // 입력창 비우기
 
-      // 2. 조회됐고 버스가 있으면 → 자동으로 첫 버스 선택 + 좌석 추천
-      if (data.searched && data.buses.length > 0) {
-        const chosenBus = data.buses[0]  // 제일 이른 버스 (나중에 규칙 정교화)
-        const seatData: SeatRecommendation = await recommendSeat({
-          seatPreferences: data.condition.seatPreferences,
-          accessibilityNeeds: data.condition.accessibilityNeeds,
-          busGrade: chosenBus.grade,
+      if (session.state === 'COLLECTING_CONDITIONS') {
+        // 2a. 아직 정보 부족 → 되묻기
+        setMessage(buildQuestion(session))
+        setBus(null)
+        setSeat(null)
+      } else {
+        // 2b. 조건 다 모임 → 버스 조회
+        setMessage('조건이 모두 확인되었습니다. 버스를 찾고 있어요...')
+        const buses = await searchBuses({
+          departure: session.departure!,
+          arrival: session.arrival!,
+          date: session.date!,
         })
-        setSeat(seatData)
+
+        if (buses.length === 0) {
+          setMessage('해당 조건의 버스를 찾지 못했습니다.')
+          setBus(null)
+          setSeat(null)
+        } else {
+          const chosenBus = buses[0]
+          setBus(chosenBus)
+          setMessage(`${chosenBus.departureTime} ${chosenBus.grade} 버스를 추천합니다.`)
+
+          // 좌석 추천
+          const seatData = await recommendSeat({
+            seatPreferences: session.seatPreferences,
+            accessibilityNeeds: session.accessibilityNeeds,
+            busGrade: chosenBus.grade,
+          })
+          setSeat(seatData)
+        }
       }
     } catch (error) {
       if (error instanceof ApiError) {
         setError(error.errors[0]?.message ?? error.message)
       } else {
-        setError('처리 중 문제가 발생했습니다. 백엔드 서버가 켜져 있는지 확인해 주세요.')
+        setError('처리 중 문제가 발생했습니다. 서버 상태를 확인해 주세요.')
       }
     } finally {
       setLoading(false)
     }
   }
 
-  const chosenBus = result?.searched && result.buses.length > 0 ? result.buses[0] : null
-
   return (
     <div className="conversation-panel">
-      <label htmlFor="travel-request">어디로 가실 예정인가요?</label>
+      <p style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{message}</p>
+
+      <label htmlFor="travel-request">말씀하시거나 입력해 주세요</label>
       <textarea
         id="travel-request"
         value={text}
         onChange={(e) => setText(e.target.value)}
       />
+
       <div className="panel-actions">
         <button
           className="primary-button"
           type="button"
-          onClick={handleSearch}
-          disabled={loading}
+          onClick={handleMicClick}
+          disabled={transcribing || loading}
         >
-          {loading ? '추천하는 중...' : '버스 추천받기'}
+          {recording ? '🔴 녹음 중지' : transcribing ? '인식 중...' : '🎤 말하기'}
+        </button>
+        <button
+          className="primary-button"
+          type="button"
+          onClick={handleSend}
+          disabled={loading || recording || !text.trim()}
+        >
+          {loading ? '처리 중...' : '보내기'}
         </button>
       </div>
 
       {error && <p style={{ color: 'red' }}>{error}</p>}
 
-      {result && (
-        <div style={{ marginTop: '20px' }}>
-          <h3>말씀하신 조건</h3>
-          <p>
-            {result.condition.departure ?? '?'} → {result.condition.arrival ?? '?'}
-            {' / '}
-            {result.condition.date ?? '날짜 미정'}
-          </p>
-
-          {!result.searched && (
-            <p>필요한 정보가 부족해요: {result.condition.missingFields.join(', ')}</p>
-          )}
-        </div>
-      )}
-
-      {chosenBus && (
+      {bus && (
         <div style={{ marginTop: '20px' }}>
           <h3>추천 버스</h3>
           <p>
-            {chosenBus.departureTime} 출발 · {chosenBus.grade} · {chosenBus.charge.toLocaleString()}원
+            {bus.departureTime} 출발 · {bus.grade} · {bus.charge.toLocaleString()}원
+            {' '}({bus.departure} → {bus.arrival})
           </p>
         </div>
       )}
