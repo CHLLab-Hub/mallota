@@ -9,3 +9,35 @@ export async function getHealth(): Promise<{ status: string; service: string }> 
 
   return response.json() as Promise<{ status: string; service: string }>
 }
+
+export async function searchConversation(text: string) {
+  const response = await fetch(`${apiBaseUrl}/api/conversation/search`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ text }),
+  })
+
+  if (!response.ok) {
+    throw new Error('검색 요청에 실패했습니다.')
+  }
+
+  return response.json()
+}
+
+export async function recommendSeat(
+  seatPreferences: string[],
+  accessibilityNeeds: string[],
+  busGrade: string,
+) {
+  const response = await fetch(`${apiBaseUrl}/api/seats/recommend`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ busGrade, seatPreferences, accessibilityNeeds }),
+  })
+
+  if (!response.ok) {
+    throw new Error('좌석 추천 요청에 실패했습니다.')
+  }
+
+  return response.json()
+}
