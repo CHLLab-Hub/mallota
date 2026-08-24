@@ -71,7 +71,7 @@ public class SeatRecommendService {
 
         // 예약 가능한 좌석이 아예 없는 경우
         if (bestSeats.isEmpty()) {
-            return new SeatRecommendation(null, 0, List.of("예약 가능한 좌석이 없습니다."), List.of());
+            return new SeatRecommendation(null, 0, List.of("예약 가능한 좌석이 없습니다."), List.of(), List.of());
         }
 
         // 첫 번째 = 대표 추천 (앞줄·왼쪽 우선), 나머지 = 동률 대안
@@ -83,6 +83,6 @@ public class SeatRecommendService {
             bestReasons.add("예약 가능한 좌석입니다.");
         }
 
-        return new SeatRecommendation(bestSeat, bestScore, bestReasons, alternatives);
+        return new SeatRecommendation(bestSeat, bestScore, bestReasons, alternatives, seats);
     }
 }

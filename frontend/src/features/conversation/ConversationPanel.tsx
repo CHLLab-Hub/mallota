@@ -9,6 +9,7 @@ import type {
   BusSchedule,
   SeatRecommendation,
 } from './types'
+import { SeatMap } from './SeatMap'
 
 // TAGO 시간(202608260100) → 읽기 좋은 형식("오전 1시")
 function formatTime(raw: string): string {
@@ -188,6 +189,12 @@ export function ConversationPanel() {
           {seat.alternatives.length > 0 && (
             <p>같은 조건의 다른 좌석: {seat.alternatives.map((s) => s.seatNo).join(', ')}</p>
           )}
+
+          <SeatMap
+            seats={seat.allSeats}
+            recommendedNo={seat.bestSeat.seatNo}
+            alternativeNos={seat.alternatives.map((s) => s.seatNo)}
+          />
         </div>
       )}
     </div>

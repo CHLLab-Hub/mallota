@@ -33,6 +33,8 @@ export interface ConversationSearchResult {
 
 export interface Seat {
   seatNo: string
+  row: number
+  column: number
   position: string
   side: string
   available: boolean
@@ -43,6 +45,7 @@ export interface SeatRecommendation {
   score: number
   reasons: string[]
   alternatives: Seat[]
+  allSeats: Seat[]
 }
 
 export type ConversationStateValue =
