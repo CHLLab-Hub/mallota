@@ -14,6 +14,9 @@ backend/.gradle/
 backend/build/
 backend/target/
 
+# AI
+.venv/
+
 # Editors and operating systems
 .idea/
 .vscode/
