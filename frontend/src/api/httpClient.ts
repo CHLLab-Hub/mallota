@@ -23,3 +23,21 @@ export async function searchConversation(text: string) {
 
   return response.json()
 }
+
+export async function recommendSeat(
+  seatPreferences: string[],
+  accessibilityNeeds: string[],
+  busGrade: string,
+) {
+  const response = await fetch(`${apiBaseUrl}/api/seats/recommend`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ busGrade, seatPreferences, accessibilityNeeds }),
+  })
+
+  if (!response.ok) {
+    throw new Error('좌석 추천 요청에 실패했습니다.')
+  }
+
+  return response.json()
+}

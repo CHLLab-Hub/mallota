@@ -30,3 +30,17 @@ export interface ConversationSearchResult {
   buses: BusSchedule[]
   searched: boolean
 }
+
+export interface Seat {
+  seatNo: string
+  position: string
+  side: string
+  available: boolean
+}
+
+export interface SeatRecommendation {
+  bestSeat: Seat | null
+  score: number
+  reasons: string[]
+  alternatives: Seat[]
+}
