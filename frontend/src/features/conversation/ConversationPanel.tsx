@@ -5,13 +5,13 @@ import { speechToText, textToSpeech } from '../../api/voiceApi'
 import { ApiError } from '../../api/httpClient'
 import { useVoiceRecorder } from './useVoiceRecorder'
 import { SeatMap } from './SeatMap'
+import { BusTicket } from './BusTicket'
 import type {
   ConversationSessionResult,
   BusSchedule,
   SeatRecommendation,
 } from './types'
 
-// 빠진 필수 정보를 보고 되물을 질문 만들기
 function buildQuestion(session: ConversationSessionResult): string {
   if (!session.departure) return '어디에서 출발하시나요?'
   if (!session.arrival) return '어디로 가시나요?'
@@ -19,7 +19,6 @@ function buildQuestion(session: ConversationSessionResult): string {
   return ''
 }
 
-// TAGO 시간(202608260100) → 읽기 좋은 형식("오전 1시")
 function formatTime(raw: string): string {
   if (!raw || raw.length < 12) return raw
   const hour = parseInt(raw.substring(8, 10), 10)
@@ -28,6 +27,8 @@ function formatTime(raw: string): string {
   const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour
   return minute === '00' ? `${period} ${displayHour}시` : `${period} ${displayHour}시 ${minute}분`
 }
+
+type Stage = 'chat' | 'payment' | 'ticket'
 
 export function ConversationPanel() {
   const [text, setText] = useState('')
@@ -40,8 +41,12 @@ export function ConversationPanel() {
   const [seat, setSeat] = useState<SeatRecommendation | null>(null)
   const [selectedSeat, setSelectedSeat] = useState<string | null>(null)
   const [selecting, setSelecting] = useState(false)
+  const [stage, setStage] = useState<Stage>('chat')
 
   const { recording, startRecording, stopRecording } = useVoiceRecorder()
+
+  // 최종 확정된 좌석 (직접 선택했으면 그것, 아니면 추천)
+  const finalSeatNo = selectedSeat ?? seat?.bestSeat?.seatNo ?? ''
 
   async function speak(text: string) {
     if (!text.trim()) return
@@ -52,7 +57,7 @@ export function ConversationPanel() {
         await audio.play()
       }
     } catch (e) {
-      // 음성 재생 실패는 조용히 무시
+      // 무시
     }
   }
 
@@ -137,6 +142,46 @@ export function ConversationPanel() {
     }
   }
 
+  // 처음으로 돌아가기 (초기화)
+  function reset() {
+    setStage('chat')
+    setBus(null)
+    setSeat(null)
+    setSelectedSeat(null)
+    setSelecting(false)
+    setSessionId(null)
+    setMessage('어디로 가실 예정인지 말씀해 주세요.')
+  }
+
+  // 티켓 화면
+  if (stage === 'ticket' && bus) {
+    return <BusTicket bus={bus} seatNo={finalSeatNo} onClose={reset} />
+  }
+
+  // 결제 화면
+  if (stage === 'payment' && bus) {
+    return (
+      <div className="conversation-panel">
+        <h3>결제 확인</h3>
+        <div style={{ marginTop: '16px', fontSize: '1.1rem', lineHeight: 1.8 }}>
+          <div>{bus.departure} → {bus.arrival}</div>
+          <div>{formatTime(bus.departureTime)} 출발 · {bus.grade}</div>
+          <div>좌석: <b>{finalSeatNo}</b></div>
+          <div>결제 금액: <b>{bus.charge.toLocaleString()}원</b></div>
+        </div>
+        <div className="panel-actions" style={{ marginTop: '20px' }}>
+          <button className="primary-button" type="button" onClick={() => setStage('chat')}>
+            뒤로
+          </button>
+          <button className="primary-button" type="button" onClick={() => setStage('ticket')}>
+            결제 확인
+          </button>
+        </div>
+      </div>
+    )
+  }
+
+  // 대화 화면 (기본)
   return (
     <div className="conversation-panel">
       <p style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{message}</p>
@@ -181,7 +226,7 @@ export function ConversationPanel() {
 
       {seat && seat.bestSeat && (
         <div style={{ marginTop: '20px' }}>
-          <h3>추천 좌석: {selectedSeat ?? seat.bestSeat.seatNo}</h3>
+          <h3>추천 좌석: {finalSeatNo}</h3>
           <ul>
             {seat.reasons.map((reason, i) => (
               <li key={i}>{reason}</li>
@@ -212,6 +257,15 @@ export function ConversationPanel() {
             selectedNo={selectedSeat ?? undefined}
             onSelect={selecting ? (s) => setSelectedSeat(s.seatNo) : undefined}
           />
+
+          <button
+            type="button"
+            className="primary-button"
+            onClick={() => setStage('payment')}
+            style={{ marginTop: '16px', fontSize: '1.1rem' }}
+          >
+            결제하기
+          </button>
         </div>
       )}
     </div>
