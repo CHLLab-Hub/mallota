@@ -11,6 +11,6 @@ public class HealthController {
 
     @GetMapping
     public HealthResponse health() {
-        return new HealthResponse("UP", "malrota-backend");
-    }
+    return new HealthResponse("UP", "malrota-backend", java.time.LocalDateTime.now());
+}
 }
