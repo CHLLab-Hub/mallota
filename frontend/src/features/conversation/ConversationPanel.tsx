@@ -4,23 +4,12 @@ import { recommendSeat } from '../../api/seatApi'
 import { speechToText, textToSpeech } from '../../api/voiceApi'
 import { ApiError } from '../../api/httpClient'
 import { useVoiceRecorder } from './useVoiceRecorder'
+import { SeatMap } from './SeatMap'
 import type {
   ConversationSessionResult,
   BusSchedule,
   SeatRecommendation,
 } from './types'
-import { SeatMap } from './SeatMap'
-
-// TAGO 시간(202608260100) → 읽기 좋은 형식("오전 1시")
-function formatTime(raw: string): string {
-  // 뒤 4자리가 HHMM
-  if (!raw || raw.length < 12) return raw
-  const hour = parseInt(raw.substring(8, 10), 10)
-  const minute = raw.substring(10, 12)
-  const period = hour < 12 ? '오전' : '오후'
-  const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour
-  return minute === '00' ? `${period} ${displayHour}시` : `${period} ${displayHour}시 ${minute}분`
-}
 
 // 빠진 필수 정보를 보고 되물을 질문 만들기
 function buildQuestion(session: ConversationSessionResult): string {
@@ -28,6 +17,16 @@ function buildQuestion(session: ConversationSessionResult): string {
   if (!session.arrival) return '어디로 가시나요?'
   if (!session.date) return '언제 출발하시나요?'
   return ''
+}
+
+// TAGO 시간(202608260100) → 읽기 좋은 형식("오전 1시")
+function formatTime(raw: string): string {
+  if (!raw || raw.length < 12) return raw
+  const hour = parseInt(raw.substring(8, 10), 10)
+  const minute = raw.substring(10, 12)
+  const period = hour < 12 ? '오전' : '오후'
+  const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour
+  return minute === '00' ? `${period} ${displayHour}시` : `${period} ${displayHour}시 ${minute}분`
 }
 
 export function ConversationPanel() {
@@ -39,10 +38,11 @@ export function ConversationPanel() {
   const [error, setError] = useState<string | null>(null)
   const [bus, setBus] = useState<BusSchedule | null>(null)
   const [seat, setSeat] = useState<SeatRecommendation | null>(null)
+  const [selectedSeat, setSelectedSeat] = useState<string | null>(null)
+  const [selecting, setSelecting] = useState(false)
 
   const { recording, startRecording, stopRecording } = useVoiceRecorder()
 
-    // 텍스트를 음성으로 재생
   async function speak(text: string) {
     if (!text.trim()) return
     try {
@@ -52,7 +52,7 @@ export function ConversationPanel() {
         await audio.play()
       }
     } catch (e) {
-      // 음성 재생 실패는 조용히 무시 (화면 텍스트는 이미 보이니까)
+      // 음성 재생 실패는 조용히 무시
     }
   }
 
@@ -82,6 +82,8 @@ export function ConversationPanel() {
   async function handleSend() {
     if (!text.trim()) return
     setLoading(true)
+    setSelectedSeat(null)
+    setSelecting(false)
     setError(null)
     try {
       const session: ConversationSessionResult = await parseConversation(text, sessionId)
@@ -91,7 +93,7 @@ export function ConversationPanel() {
       if (session.state === 'COLLECTING_CONDITIONS') {
         const question = buildQuestion(session)
         setMessage(question)
-        speak(question) // 되묻는 질문 음성으로
+        speak(question)
         setBus(null)
         setSeat(null)
       } else {
@@ -119,7 +121,6 @@ export function ConversationPanel() {
           })
           setSeat(seatData)
 
-          // 버스 + 좌석을 음성으로 안내
           const msg = `${formatTime(chosenBus.departureTime)} 출발 ${chosenBus.grade} 버스를 추천합니다. 추천 좌석은 ${seatData.bestSeat?.seatNo ?? ''}번입니다.`
           setMessage(msg)
           speak(msg)
@@ -180,20 +181,36 @@ export function ConversationPanel() {
 
       {seat && seat.bestSeat && (
         <div style={{ marginTop: '20px' }}>
-          <h3>추천 좌석: {seat.bestSeat.seatNo}</h3>
+          <h3>추천 좌석: {selectedSeat ?? seat.bestSeat.seatNo}</h3>
           <ul>
             {seat.reasons.map((reason, i) => (
               <li key={i}>{reason}</li>
             ))}
           </ul>
-          {seat.alternatives.length > 0 && (
-            <p>같은 조건의 다른 좌석: {seat.alternatives.map((s) => s.seatNo).join(', ')}</p>
+
+          {!selecting && (
+            <button
+              type="button"
+              className="primary-button"
+              onClick={() => setSelecting(true)}
+              style={{ marginTop: '8px' }}
+            >
+              다른 좌석 선택하기
+            </button>
+          )}
+
+          {selecting && (
+            <p style={{ color: '#2563eb', marginTop: '8px' }}>
+              앉고 싶은 좌석을 눌러주세요.
+            </p>
           )}
 
           <SeatMap
             seats={seat.allSeats}
             recommendedNo={seat.bestSeat.seatNo}
             alternativeNos={seat.alternatives.map((s) => s.seatNo)}
+            selectedNo={selectedSeat ?? undefined}
+            onSelect={selecting ? (s) => setSelectedSeat(s.seatNo) : undefined}
           />
         </div>
       )}
