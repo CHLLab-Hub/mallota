@@ -1,5 +1,7 @@
 import { useState } from 'react'
-import { searchConversation, recommendSeat } from '../../api/httpClient'
+import { searchConversation } from '../../api/conversationApi'
+import { ApiError } from '../../api/httpClient'
+import { recommendSeat } from '../../api/seatApi'
 import type { ConversationSearchResult, SeatRecommendation } from './types'
 
 export function ConversationPanel() {
@@ -22,15 +24,19 @@ export function ConversationPanel() {
       // 2. 조회됐고 버스가 있으면 → 자동으로 첫 버스 선택 + 좌석 추천
       if (data.searched && data.buses.length > 0) {
         const chosenBus = data.buses[0]  // 제일 이른 버스 (나중에 규칙 정교화)
-        const seatData: SeatRecommendation = await recommendSeat(
-          data.condition.seatPreferences,
-          data.condition.accessibilityNeeds,
-          chosenBus.grade,
-        )
+        const seatData: SeatRecommendation = await recommendSeat({
+          seatPreferences: data.condition.seatPreferences,
+          accessibilityNeeds: data.condition.accessibilityNeeds,
+          busGrade: chosenBus.grade,
+        })
         setSeat(seatData)
       }
-    } catch (e) {
-      setError('처리 중 문제가 발생했습니다. 백엔드 서버가 켜져 있는지 확인해 주세요.')
+    } catch (error) {
+      if (error instanceof ApiError) {
+        setError(error.errors[0]?.message ?? error.message)
+      } else {
+        setError('처리 중 문제가 발생했습니다. 백엔드 서버가 켜져 있는지 확인해 주세요.')
+      }
     } finally {
       setLoading(false)
     }
