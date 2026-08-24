@@ -19,7 +19,7 @@ public class SeatRecommendService {
     }
 
     public SeatRecommendation recommend(SeatRecommendRequest request) {
-        List<Seat> seats = seatGenerator.generate();
+        List<Seat> seats = seatGenerator.generate(request.busGrade());
 
         List<String> access = request.accessibilityNeeds() != null
                 ? request.accessibilityNeeds() : List.of();
