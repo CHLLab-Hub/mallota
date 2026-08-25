@@ -58,44 +58,53 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
             <div className={`chat-bubble ${m.role}`}>{m.text}</div>
           </div>
         ))}
-      </div>
 
-      {error && <p style={{ color: 'red' }}>{error}</p>}
+        {error && <p style={{ color: 'red' }}>{error}</p>}
 
-      <div className="mic-area">
-        <button
-          type="button"
-          className={`mic-button ${recording ? 'recording' : ''}`}
-          onClick={handleMicClick}
-          disabled={transcribing || loading}
-        >
-          {recording ? '⏹' : '🎤'}
-        </button>
-        <div className="mic-label">
-          {recording ? '녹음 중... (누르면 완료)' : transcribing ? '인식 중...' : loading ? '처리 중...' : '눌러서 말하기'}
-        </div>
-        <button type="button" className="mic-sublabel" onClick={() => setShowInput((v) => !v)}>
-          직접 글씨로 입력하기
-        </button>
-
-        {showInput && (
-          <div style={{ width: '100%' }}>
-            <textarea
-              className="chat-input"
-              value={text}
-              onChange={(e) => setText(e.target.value)}
-              placeholder="여기에 입력하세요"
-            />
-            <button
-              type="button"
-              className="send-button"
-              onClick={handleSendInput}
-              disabled={loading || !text.trim()}
-            >
-              보내기
-            </button>
+        <div className="mic-area">
+          <button
+            type="button"
+            className={`mic-button ${recording ? 'recording' : ''}`}
+            onClick={handleMicClick}
+            disabled={transcribing || loading}
+          >
+            {recording ? (
+              <svg width="36" height="36" viewBox="0 0 24 24" fill="white">
+                <rect x="6" y="6" width="12" height="12" rx="2" />
+              </svg>
+            ) : (
+              <svg width="40" height="40" viewBox="0 0 24 24" fill="white">
+                <path d="M12 14a3 3 0 0 0 3-3V6a3 3 0 0 0-6 0v5a3 3 0 0 0 3 3z" />
+                <path d="M17 11a1 1 0 0 1 2 0 7 7 0 0 1-6 6.92V20h2a1 1 0 0 1 0 2H9a1 1 0 0 1 0-2h2v-2.08A7 7 0 0 1 5 11a1 1 0 0 1 2 0 5 5 0 0 0 10 0z" />
+              </svg>
+            )}
+          </button>
+          <div className="mic-label">
+            {recording ? '녹음 중... (누르면 완료)' : transcribing ? '인식 중...' : loading ? '처리 중...' : '눌러서 말하기'}
           </div>
-        )}
+          <button type="button" className="mic-sublabel" onClick={() => setShowInput((v) => !v)}>
+            직접 글씨로 입력하기
+          </button>
+
+          {showInput && (
+            <div style={{ width: '100%' }}>
+              <textarea
+                className="chat-input"
+                value={text}
+                onChange={(e) => setText(e.target.value)}
+                placeholder="여기에 입력하세요"
+              />
+              <button
+                type="button"
+                className="send-button"
+                onClick={handleSendInput}
+                disabled={loading || !text.trim()}
+              >
+                보내기
+              </button>
+            </div>
+          )}
+        </div>
       </div>
     </div>
   )
