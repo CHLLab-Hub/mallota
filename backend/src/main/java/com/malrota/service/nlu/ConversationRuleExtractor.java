@@ -1,6 +1,7 @@
 package com.malrota.service.nlu;
 
 import org.springframework.stereotype.Component;
+
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -15,19 +16,51 @@ import java.util.regex.Pattern;
  */
 @Component
 public class ConversationRuleExtractor {
-    
-    // 전국의 세부 터미널명과 별칭(강남, 사상, 유스퀘어, 센트럴, 노포 등)을 모두 등록하는 위치
-    private static final String TERMINALS = 
-            "서울경부|센트럴시티|센트럴|동서울|서울남부|서울|강남|고터|" +
-            "동대구|서대구|대구북부|대구서부|대구|" +
-            "부산종합|부산서부|사상|해운대|부산|노포|" +
-            "대전복합|유성고속|대전청사|유성|대전|" +
-            "광주종합|유스퀘어|광주|" +
-            "인천종합|인천|수원종합|수원|성남종합|성남|야탑|" +
-            "청주고속|북청주|청주|천안고속|천안|전주고속|전주|" +
-            "강릉고속|강릉|원주고속|원주|속초고속|속초|포항고속|포항|창원고속|창원|마산고속|마산|완도";
 
-    // 아래 DEPARTURE_PATTERN과 ARRIVAL_PATTERN이 위 TERMINALS를 자동으로 참조합니다.
+    // ⭐ 어르신들이 자주 쓰시는 옛 지명(광천동, 노포동, 가경동 등), 노선명(호남선, 경부선), 풀네임 전체 통합
+    private static final String TERMINALS = 
+            // 1. 서울권
+            "서울경부|서울고속|강남고속|강남터미널|강남|경부선|" +
+            "센트럴시티|센트럴|호남선터미널|호남선|" +
+            "동서울터미널|동서울|강변터미널|강변역|강변|" +
+            "서울남부터미널|서울남부|남부터미널|서초동터미널|서울|" +
+
+            // 2. 대구권
+            "동대구복합환승센터|동대구터미널|동대구역|동대구|" +
+            "서대구고속버스터미널|서대구터미널|서대구역|서대구|만평|" +
+            "대구북부정류장|대구북부터미널|북부정류장|대구서부정류장|서부정류장|대구|" +
+
+            // 3. 부산권
+            "부산종합버스터미널|부산고속버스터미널|노포동터미널|노포동|노포역|노포|" +
+            "부산서부버스터미널|서부산터미널|사상터미널|사상역|사상|" +
+            "해운대시외버스터미널|해운대터미널|해운대|부산|" +
+
+            // 4. 대전권
+            "대전복합터미널|동대전터미널|용전동터미널|대전복합|" +
+            "유성고속버스터미널|유성시외버스터미널|유성터미널|유성|" +
+            "대전청사터미널|정부청사터미널|둔산동터미널|대전|" +
+
+            // 5. 광주권 (어르신 1등 호칭: 광천동)
+            "광주종합버스터미널|광주고속버스터미널|광천동터미널|유스퀘어|광주|" +
+            "광주송정역시외버스정류소|송정역|송정|" +
+
+            // 6. 인천 / 경기권
+            "인천종합버스터미널|인천터미널|관교동터미널|인천|" +
+            "수원종합버스터미널|수원터미널|서수원터미널|수원|" +
+            "성남종합버스터미널|성남터미널|야탑터미널|야탑역|성남|" +
+
+            // 7. 충청 / 전라 / 강원 / 경상권
+            "청주고속버스터미널|청주시외버스터미널|가경동터미널|북청주|청주|" +
+            "천안고속버스터미널|천안종합터미널|천안터미널|천안|" +
+            "전주고속버스터미널|전주시외버스터미널|전주터미널|전주|" +
+            "강릉고속버스터미널|강릉터미널|강릉|" +
+            "원주고속버스터미널|원주시외버스터미널|원주터미널|원주|" +
+            "속초고속버스터미널|속초시외버스터미널|속초터미널|속초|" +
+            "포항고속버스터미널|포항시외버스터미널|포항터미널|포항|" +
+            "창원종합버스터미널|창원터미널|창원|" +
+            "마산고속버스터미널|마산시외버스터미널|마산터미널|마산|" +
+            "완도공용버스터미널|완도터미널|완도";
+
     private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(?:출발(?:지)?[:\\s]*)?(" + TERMINALS + ")\\s*(?:에서|서|발)");
     private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))");
     
@@ -51,6 +84,8 @@ public class ConversationRuleExtractor {
     private static final Pattern COLON_TIME_PATTERN = Pattern.compile("(\\d{1,2}):(\\d{2})");
     private static final Pattern PASSENGER_PATTERN = Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표)");
 
+    // ConversationRuleExtractor.java 내부
+
     public RuleParse extract(String text, LocalDateTime baseDateTime) {
         String input = text == null ? "" : text.trim();
         
@@ -63,6 +98,8 @@ public class ConversationRuleExtractor {
         DateTimeResolution resolution = resolveDateTime(input, baseDateTime);
         List<String> seats = extractSeatPreferences(input);
         List<String> needs = extractAccessibilityNeeds(input);
+        
+        boolean passengerMentioned = hasPassengerExpression(input);
         int passengerCount = extractPassengers(input);
 
         return new RuleParse(
@@ -75,11 +112,18 @@ public class ConversationRuleExtractor {
                 servicePreference(input),
                 busGradePreference(input),
                 passengerCount,
+                passengerMentioned,
                 seats,
                 needs,
                 hasSeatPreferenceExpression(input),
                 hasAccessibilityExpression(input)
         );
+    }
+
+    private boolean hasPassengerExpression(String text) {
+        if (text == null || text.isBlank()) return false;
+        Matcher m = Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|분|식구)").matcher(text);
+        return m.find() || List.of("혼자", "둘이", "셋이", "넷이", "다섯이", "부부", "데리고", "모시고", "고치", "같이").stream().anyMatch(text::contains);
     }
 
     private DateTimeResolution resolveDateTime(String text, LocalDateTime base) {
@@ -120,9 +164,9 @@ public class ConversationRuleExtractor {
             }
         }
 
-        // 5. 시각 처리 (12/24시간제 및 저녁 7시 -> 19:00 변환)
+        // 시각 처리 (12/24시간제 및 저녁 7시 -> 19:00, 점심 1시 -> 13:00 변환)
         Matcher timeMatcher = TIME_PATTERN.matcher(text);
-        if (timeMatcher.find()) {
+        while (timeMatcher.find()) {
             String ampm = timeMatcher.group(1);
             int hour = Integer.parseInt(timeMatcher.group(2));
             int minute = text.contains("반") ? 30 : (timeMatcher.group(3) != null ? Integer.parseInt(timeMatcher.group(3)) : 0);
@@ -132,13 +176,13 @@ public class ConversationRuleExtractor {
             else if (List.of("오전", "새벽", "아침").contains(ampm) && hour == 12) hour = 0;
 
             if (hour < 24 && minute < 60) time = LocalTime.of(hour, minute);
-        } else {
-            Matcher colonMatcher = COLON_TIME_PATTERN.matcher(text);
-            if (colonMatcher.find()) {
-                time = LocalTime.of(Integer.parseInt(colonMatcher.group(1)), Integer.parseInt(colonMatcher.group(2)));
-            }
-        }
-
+        
+            else {
+                Matcher colonMatcher = COLON_TIME_PATTERN.matcher(text);
+                if (colonMatcher.find()) {
+                    time = LocalTime.of(Integer.parseInt(colonMatcher.group(1)), Integer.parseInt(colonMatcher.group(2)));
+                }
+        }}
         return new DateTimeResolution(date, time);
     }
 
@@ -181,27 +225,38 @@ public class ConversationRuleExtractor {
     }
 
     private int extractPassengers(String text) {
-        if (text.contains("혼자") || text.contains("한 명") || text.contains("1명") || text.contains("한 장") || text.contains("1장")) return 1;
-        if (text.contains("둘이") || text.contains("두 명") || text.contains("2명") || text.contains("두 장") || text.contains("2장") || text.contains("부부")) return 2;
+        if (text == null || text.isBlank()) return 1;
+
+        // 숫자 + 단위 (예: "3명", "4장", "3식구", "4인")
+        Matcher digitMatcher = PASSENGER_PATTERN.matcher(text);
+        if (digitMatcher.find()) {
+            try {
+                int count = Integer.parseInt(digitMatcher.group(1));
+                if (count > 0 && count <= 45) return count;
+            } catch (Exception ignored) {}
+        }
+
+        // 한글 수사 + '식구' / '명' / '장' 매핑
+        if (List.of("여덟", "여덟이", "여덟 명", "여덟 장", "여덟 식구").stream().anyMatch(text::contains)) return 8;
+        if (List.of("일곱", "일곱이", "일곱 명", "일곱 장", "일곱 식구").stream().anyMatch(text::contains)) return 7;
+        if (List.of("여섯", "여섯이", "여섯이서", "여섯 명", "여섯 장", "여섯 식구").stream().anyMatch(text::contains)) return 6;
+        if (List.of("다섯", "다섯이", "다섯이서", "다섯 명", "다섯 장", "다섯 식구").stream().anyMatch(text::contains)) return 5;
+        if (List.of("네 명", "넷이서", "넷이", "네 장", "네 사람", "네자리", "네 분", "네 식구").stream().anyMatch(text::contains)) return 4;
+        if (List.of("세 명", "셋이서", "셋이", "세 장", "세 사람", "세자리", "세 분", "세 식구").stream().anyMatch(text::contains)) return 3;
+        if (List.of("두 명", "둘이서", "둘이", "두 장", "두 사람", "두자리", "두 분", "두 식구", "부부").stream().anyMatch(text::contains)) return 2;
+        if (List.of("한 명", "혼자서", "혼자", "한 장", "한 사람", "한자리", "한 분", "한 식구").stream().anyMatch(text::contains)) return 1;
+
+        // 인원수 미지정 시 가족/식구 동행 감지
+        boolean hasFamily = List.of("식구", "가족", "할머니", "할아버지", "할망", "하르방", "손주", "손자", "손녀", "손지", "영감", "바깥양반", "안사람", "집사람", "딸래미", "아들래미").stream().anyMatch(text::contains);
+        boolean hasTogether = List.of("데리고", "데꼬", "모시고", "이랑", "하고", "고치", "같이", "탈 건데", "갈 건데", "함께").stream().anyMatch(text::contains);
         
-        // 가족 호칭 + 동행 표현 -> 2명 자동 계산
-        boolean hasFamily = List.of("할머니", "할아버지", "할망", "하르방", "손주", "손자", "손녀", "손지", "영감", "바깥양반", "안사람", "집사람", "딸래미", "아들래미").stream().anyMatch(text::contains);
-        boolean hasTogether = List.of("데리고", "데꼬", "모시고", "이랑", "하고", "고치", "같이", "둘이", "탈 건데", "갈 건데").stream().anyMatch(text::contains);
+        // "식구들이랑", "가족들이랑"처럼 동행은 있지만 인원수가 안 적힌 경우 -> 0 반환 (질문 유도)
+        if (text.contains("식구") || text.contains("가족")) {
+            return 0; // 0을 반환하여 백엔드가 "몇 장 드릴까요?"를 질문하게 만듦
+        }
+
         if (hasFamily && hasTogether) return 2;
 
-        Matcher passengers = PASSENGER_PATTERN.matcher(text);
-        if (passengers.find()) {
-            String val = passengers.group(1);
-            return switch (val) {
-                case "한", "하나" -> 1;
-                case "두", "둘" -> 2;
-                case "세", "셋" -> 3;
-                case "네", "넷" -> 4;
-                default -> {
-                    try { yield Integer.parseInt(val); } catch (Exception e) { yield 1; }
-                }
-            };
-        }
         return 1;
     }
 
@@ -294,6 +349,7 @@ public class ConversationRuleExtractor {
             String servicePreference,
             String busGradePreference,
             int passengers,
+            boolean passengerMentioned, 
             List<String> seatPreferences,
             List<String> accessibilityNeeds,
             boolean seatPreferenceMentioned,

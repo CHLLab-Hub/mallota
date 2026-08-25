@@ -13,6 +13,7 @@ import org.springframework.stereotype.Service;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -37,15 +38,15 @@ public class ConversationParseService {
         LocalDateTime now = LocalDateTime.now();
         String isoDateTime = now.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "+09:00";
 
-        // 1. 룰베이스 추출기 1차 실행 (시간 정규화 & 안전망)
+        // 룰베이스 추출기 1차 실행 (시간 정규화 & 안전망)
         ConversationRuleExtractor.RuleParse rules = ruleExtractor.extract(request.text(), now);
         ConversationParseResponse llmResult = null;
 
-        // 2. watsonx.ai LLM 호출 (최적화 프롬프트)
+        // watsonx.ai LLM 호출 (ask 메서드 호출)
         if (watsonxClient != null && watsonxClient.isConfigured()) {
             try {
                 String prompt = buildPrompt(request.text(), isoDateTime, session);
-                String rawAnswer = watsonxClient.generate(prompt);
+                String rawAnswer = watsonxClient.ask(prompt); // ⭐ generate -> ask로 통일하여 컴파일 에러 해결
                 llmResult = objectMapper.readValue(extractJson(rawAnswer), ConversationParseResponse.class);
             } catch (Exception e) {
                 log.warn("[ConversationParseService] LLM 호출 실패, 룰베이스 결과로 대체: {}", e.getMessage());
@@ -53,12 +54,13 @@ public class ConversationParseService {
         }
 
         // 3. LLM + 룰베이스 + 세션 상태 병합 및 반문 생성
-        return normalize(llmResult, rules, session);
+        return normalize(llmResult, rules, session, request.text());
     }
 
     private ConversationParseResponse normalize(ConversationParseResponse llm,
                                                 ConversationRuleExtractor.RuleParse rules,
-                                                ConversationSession session) {
+                                                ConversationSession session,
+                                                String rawText) {
         String intent = firstNonBlank(rules.intent(), value(llm, ConversationParseResponse::intent), "BUS_SEARCH");
         String departure = firstNonBlank(rules.departure(), value(llm, ConversationParseResponse::departure), sessionValue(session, ConversationSession::getDeparture));
         String arrival = firstNonBlank(rules.arrival(), value(llm, ConversationParseResponse::arrival), sessionValue(session, ConversationSession::getArrival));
@@ -68,9 +70,16 @@ public class ConversationParseService {
         String servicePreference = firstNonBlank(rules.servicePreference(), value(llm, ConversationParseResponse::servicePreference), sessionValue(session, ConversationSession::getServicePreference), "ANY");
         String busGradePreference = firstNonBlank(rules.busGradePreference(), value(llm, ConversationParseResponse::busGradePreference), sessionValue(session, ConversationSession::getBusGradePreference), "ANY");
         
-        int passengers = rules.passengers() > 1 ? rules.passengers()
-                : llm != null && llm.passengers() > 1 ? llm.passengers()
-                : session != null && session.getPassengers() > 1 ? session.getPassengers() : 1;
+        // 인원수 계산
+        int passengers = rules.passengers() > 0 ? rules.passengers()
+                : llm != null && llm.passengers() > 0 ? llm.passengers()
+                : session != null && session.getPassengers() > 0 ? session.getPassengers() : 1;
+
+        // 인원 언급 여부 자체 검증 (컴파일 에러 방지)
+        boolean passengerMentioned = hasPassengerMention(rawText) 
+                || (rules.passengers() > 1) 
+                || (llm != null && llm.passengers() > 1) 
+                || (session != null && session.getPassengers() > 1);
 
         List<String> seatPreferences = mergePreferences(session == null ? List.of() : session.getSeatPreferences(),
                 llm == null ? null : llm.seatPreferences(), rules.seatPreferences(), rules.seatPreferenceMentioned());
@@ -79,14 +88,20 @@ public class ConversationParseService {
 
         List<String> missing = missingRequired(departure, arrival, date, departureTime, timePreference);
         
-        // ⭐ 깔끔하게 정리된 반문 생성 호출
-        String prompt = clarificationPrompt(missing, departure, arrival, seatPreferences, accessibilityNeeds);
+        // 반문 멘트 생성
+        String prompt = clarificationPrompt(missing, departure, arrival, passengers, passengerMentioned, seatPreferences, accessibilityNeeds);
 
         return new ConversationParseResponse(
                 intent, nullIfBlank(departure), nullIfBlank(arrival), nullIfBlank(date),
                 nullIfBlank(departureTime), timePreference, servicePreference, busGradePreference, passengers,
                 seatPreferences, accessibilityNeeds, missing, prompt
         );
+    }
+
+    private boolean hasPassengerMention(String text) {
+        if (text == null || text.isBlank()) return false;
+        return Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|분|식구)").matcher(text).find()
+                || List.of("혼자", "둘이", "셋이", "넷이", "다섯이", "부부", "데리고", "모시고", "고치", "같이").stream().anyMatch(text::contains);
     }
 
     private List<String> mergePreferences(List<String> existing, List<String> llmValues, List<String> ruleValues, boolean explicitlyMentioned) {
@@ -117,14 +132,15 @@ public class ConversationParseService {
     }
 
     private String clarificationPrompt(List<String> missing, String departure, String arrival, 
+                                       int passengers, boolean passengerMentioned,
                                        List<String> seatPrefs, List<String> accessNeeds) {
-        // 필수값(출발/도착/날짜/시간) 누락 시 질문
+        // 필수 이동 정보(출발/도착/날짜/시간) 누락 시 질문
         if (!missing.isEmpty()) {
             if (missing.contains("departure") && missing.contains("arrival")) {
                 return "어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.";
             }
             if (missing.contains("departure")) {
-                return (arrival != null && !arrival.isBlank() ? arrival + "행 " : "") + "버스를 탈 출발 터미널을 말씀해 주세요. (강남/동서울 등)";
+                return (arrival != null && !arrival.isBlank() ? arrival + "행 " : "") + "버스를 탈 출발 터미널을 말씀해 주세요. (강남 / 동서울 등)";
             }
             if (missing.contains("arrival")) {
                 return (departure != null && !departure.isBlank() ? departure + "에서 " : "") + "어디로 가시나요?";
@@ -140,12 +156,18 @@ public class ConversationParseService {
             }
         }
 
-        // 필수값 4개가 모두 찼지만, 약자/좌석 조건이 비어있는 경우 -> 배려 질문 생성!
-        boolean hasNoPreferences = (seatPrefs == null || seatPrefs.isEmpty()) && (accessNeeds == null || accessNeeds.isEmpty());
-        if (hasNoPreferences) {
+        // 이동 정보는 다 찼지만, 인원수를 언급하지 않은 경우 -> 인원수(표 몇 장) 질문!
+        if (!passengerMentioned) {
             String depStr = (departure != null && !departure.isBlank()) ? departure + "에서 " : "";
             String arrStr = (arrival != null && !arrival.isBlank()) ? arrival + " 가는 " : "";
-            return depStr + arrStr + "표를 찾을게요. 혹시 다리가 불편하시거나 창가/통로 등 더 편하신 자리가 있으신가요?";
+            return depStr + arrStr + "표를 찾을게요. 탑승하시는 인원은 총 몇 분이신가요? 표 몇 장 예매해 드릴까요? (혼자이시면 '한 장'이라고 말씀해 주세요.)";
+        }
+
+        // 인원수까지 확정되었으나 배려 조건이 비어있는 경우 -> 배려 질문!
+        boolean hasNoPreferences = (seatPrefs == null || seatPrefs.isEmpty()) && (accessNeeds == null || accessNeeds.isEmpty());
+        if (hasNoPreferences) {
+            String countStr = passengers > 1 ? passengers + "분" : "1분";
+            return String.format("네, %s 자리로 알아볼게요. 혹시 다리가 불편하시거나 창가/통로 등 더 편하신 좌석이 있으신가요?", countStr);
         }
 
         return null;
@@ -159,7 +181,7 @@ public class ConversationParseService {
                 jsonValue(session.getBusGradePreference()), session.getPassengers(), jsonArray(session.getSeatPreferences()), jsonArray(session.getAccessibilityNeeds()));
 
         return """
-            당신은 고령자(디지털 소외계층) 및 교통약자를 위한 고속버스 예매 서비스의 자연어 조건 추출(NLU) 인공지능입니다.
+            당신은 고령자(디지털 소외계층) 및 교통약자를 위한 고속버스 예매 NLU 인공지능입니다.
             공손하고 차분한 어투로 차근차근 설명해줘야 하고, 사용자 음성에서 추출한 조건을 절대 넘겨 짚지 않아야 합니다.
             사용자 발화와 기존 수집 정보를 해석하여, 아래에 정의된 JSON 객체만 반환하세요.
             설명, Markdown(백틱), 추가 문장, 질문을 절대 출력하지 마세요.
