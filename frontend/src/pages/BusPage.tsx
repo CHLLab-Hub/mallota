@@ -15,7 +15,7 @@ function formatTime(raw: string): string {
 }
 
 export function BusPage() {
-  const { buses, setSelectedBus, setSeat, setScreen, addMessage } = useAppState()
+  const { buses, setSelectedBus, setSeat, setScreen, addMessage, seatPreferences, accessibilityNeeds } = useAppState()
   const [loading, setLoading] = useState(false)
 
   function appSay(t: string) {
@@ -28,8 +28,8 @@ export function BusPage() {
     setLoading(true)
     try {
       const seatData = await recommendSeat({
-        seatPreferences: [],
-        accessibilityNeeds: [],
+        seatPreferences: seatPreferences,
+        accessibilityNeeds: accessibilityNeeds,
         busGrade: bus.grade,
       })
       setSeat(seatData)

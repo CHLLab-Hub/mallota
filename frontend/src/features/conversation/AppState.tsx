@@ -34,6 +34,12 @@ interface AppStateValue {
   selectedSeatNo: string | null
   setSelectedSeatNo: (no: string | null) => void
 
+    seatPreferences: string[]
+  setSeatPreferences: (p: string[]) => void
+
+  accessibilityNeeds: string[]
+  setAccessibilityNeeds: (n: string[]) => void
+
   bookings: Booking[]
   addBooking: (b: Booking) => void
   removeBooking: (id: string) => void
@@ -54,6 +60,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [selectedBus, setSelectedBus] = useState<BusSchedule | null>(null)
   const [seat, setSeat] = useState<SeatRecommendation | null>(null)
   const [selectedSeatNo, setSelectedSeatNo] = useState<string | null>(null)
+  const [seatPreferences, setSeatPreferences] = useState<string[]>([])
+  const [accessibilityNeeds, setAccessibilityNeeds] = useState<string[]>([])
   const [bookings, setBookings] = useState<Booking[]>([])
 
   function addMessage(role: 'app' | 'user', text: string) {
@@ -65,6 +73,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   function addBooking(b: Booking) {
     setBookings((prev) => [...prev, b])
   }
+
+
   function removeBooking(id: string) {
     setBookings((prev) => prev.filter((x) => x.id !== id))
   }
@@ -79,6 +89,8 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         selectedBus, setSelectedBus,
         seat, setSeat,
         selectedSeatNo, setSelectedSeatNo,
+        seatPreferences, setSeatPreferences,
+        accessibilityNeeds, setAccessibilityNeeds,
         bookings, addBooking, removeBooking,
       }}
     >

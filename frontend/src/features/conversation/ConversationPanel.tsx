@@ -9,6 +9,7 @@ export function ConversationPanel() {
   const {
     sessionId, setSessionId,
     addMessage, setBuses, setScreen,
+    setSeatPreferences, setAccessibilityNeeds,
   } = useAppState()
 
   const [loading, setLoading] = useState(false)
@@ -40,6 +41,9 @@ export function ConversationPanel() {
           appSay('출발지, 도착지, 날짜를 말씀해 주세요.')
         } else {
           appSay('조건에 맞는 버스를 찾았어요. 추천 버스를 보여드릴게요.')
+          // 좌석 선호·접근성 창고에 저장 (좌석 추천에 쓰려고)
+          setSeatPreferences(session.seatPreferences ?? [])
+          setAccessibilityNeeds(session.accessibilityNeeds ?? [])
           const buses = await searchBuses({
             departure: dep,
             arrival: arr,
