@@ -33,8 +33,8 @@ export function BusPage() {
         busGrade: bus.grade,
       })
       setSeat(seatData)
-      appSay(`${formatTime(bus.departureTime)} 출발 버스로 선택했어요. 좌석을 골라볼게요.`)
-      setTimeout(() => setScreen('seat'), 800)
+      appSay(`${formatTime(bus.departureTime)} 출발 버스를 선택했어요. 추천 좌석은 ${seatData.bestSeat?.seatNo ?? ''}번입니다. 이 좌석으로 결제할까요?`)
+      setTimeout(() => setScreen('seat'), 3000)
     } catch (e) {
       appSay('좌석 정보를 불러오지 못했습니다.')
     } finally {
@@ -48,7 +48,11 @@ export function BusPage() {
     if (buses.length === 0) return
 
     // 가장 저렴
-    if (text.includes('저렴') || text.includes('싼') || text.includes('싸')) {
+    if (text.includes('비싼') || text.includes('비싸') || text.includes('좋은') || text.includes('고급')) {
+      const expensive = [...buses].sort((a, b) => b.charge - a.charge)[0]
+      chooseBus(expensive)
+    }
+    else if (text.includes('저렴') || text.includes('싼') || text.includes('싸')) {
       const cheapest = [...buses].sort((a, b) => a.charge - b.charge)[0]
       chooseBus(cheapest)
     }
