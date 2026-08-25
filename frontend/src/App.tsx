@@ -5,6 +5,7 @@ import { BusPage } from './pages/BusPage'
 import { SeatPage } from './pages/SeatPage'
 import { ConfirmPage } from './pages/ConfirmPage'
 import { HistoryPage } from './pages/HistoryPage'
+import { MyPage } from './pages/MyPage'
 
 // 화면 전환: screen 상태에 따라 다른 화면 보여주기
 function ScreenRouter() {
@@ -21,6 +22,8 @@ function ScreenRouter() {
       return <ConfirmPage />
     case 'history':
       return <HistoryPage />
+    case 'mypage':
+      return <MyPage />
     default:
       return <HomePage />
   }
