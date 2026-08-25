@@ -137,11 +137,12 @@ export function ConversationPanel() {
         setBus(chosenBus)
 
         const seatData = await recommendSeat({
-          seatPreferences: session.seatPreferences,
-          accessibilityNeeds: session.accessibilityNeeds,
-          busGrade: chosenBus.grade,
-        })
-        setSeat(seatData)
+            seatPreferences: session.seatPreferences,
+            accessibilityNeeds: session.accessibilityNeeds,
+            busGrade: chosenBus.grade,
+            passengers: session.passengers ?? 2,
+          })
+          setSeat(seatData)
 
         const reasonText = seatData.reasons && seatData.reasons.length > 0 ? seatData.reasons[0] : ''
         const msg = `${formatTime(chosenBus.departureTime)} 출발 ${chosenBus.grade} 버스입니다. ${reasonText} 추천 좌석은 ${seatData.bestSeat?.seatNo ?? ''}번입니다.`
