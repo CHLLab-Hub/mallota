@@ -1,6 +1,5 @@
 import { createContext, useContext, useState, type ReactNode } from 'react'
-import type { BusSchedule, SeatRecommendation } from './types'
-
+import type { BusSchedule, SeatRecommendation, BusRecommendation } from './types'
 // 화면 종류
 export type Screen = 'home' | 'bus' | 'seat' | 'confirm' | 'history' | 'mypage'
 
@@ -24,6 +23,9 @@ interface AppStateValue {
 
   buses: BusSchedule[]
   setBuses: (b: BusSchedule[]) => void
+
+  recommendations: BusRecommendation[]
+  setRecommendations: (r: BusRecommendation[]) => void
 
   selectedBus: BusSchedule | null
   setSelectedBus: (b: BusSchedule | null) => void
@@ -57,6 +59,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [sessionId, setSessionId] = useState<string | null>(null)
   const [messages, setMessages] = useState<ChatMessage[]>([initialMessage])
   const [buses, setBuses] = useState<BusSchedule[]>([])
+  const [recommendations, setRecommendations] = useState<BusRecommendation[]>([])
   const [selectedBus, setSelectedBus] = useState<BusSchedule | null>(null)
   const [seat, setSeat] = useState<SeatRecommendation | null>(null)
   const [selectedSeatNo, setSelectedSeatNo] = useState<string | null>(null)
@@ -86,6 +89,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         sessionId, setSessionId,
         messages, addMessage, resetMessages,
         buses, setBuses,
+        recommendations, setRecommendations,
         selectedBus, setSelectedBus,
         seat, setSeat,
         selectedSeatNo, setSelectedSeatNo,

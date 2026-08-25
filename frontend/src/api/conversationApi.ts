@@ -3,6 +3,7 @@ import type {
   ConversationSearchResult,
   ConversationSessionResult,
   BusSchedule,
+  BusRecommendation,
 } from '../features/conversation/types'
 
 export function searchConversation(text: string, signal?: AbortSignal) {
@@ -36,6 +37,24 @@ export function searchBuses(
   signal?: AbortSignal,
 ) {
   return request<BusSchedule[]>('/api/buses/search', {
+    method: 'POST',
+    json: body,
+    signal,
+  })
+}
+export function recommendBuses(
+  body: {
+    departure: string
+    arrival: string
+    date: string
+    departureTime?: string | null
+    timePreference?: string | null
+    servicePreference?: string | null
+    busGradePreference?: string | null
+  },
+  signal?: AbortSignal,
+) {
+  return request<BusRecommendation[]>('/api/buses/recommend', {
     method: 'POST',
     json: body,
     signal,

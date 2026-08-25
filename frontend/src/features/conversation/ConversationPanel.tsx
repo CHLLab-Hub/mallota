@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { parseConversation, searchBuses } from '../../api/conversationApi'
+import { parseConversation, recommendBuses } from '../../api/conversationApi'
 import { ApiError } from '../../api/httpClient'
 import { useAppState } from './AppState'
 import { VoicePanel, speak } from './VoicePanel'
@@ -8,8 +8,9 @@ import type { ConversationSessionResult } from './types'
 export function ConversationPanel() {
   const {
     sessionId, setSessionId,
-    addMessage, setBuses, setScreen,
+    addMessage, setScreen,
     setSeatPreferences, setAccessibilityNeeds,
+    setRecommendations,
   } = useAppState()
 
   const [loading, setLoading] = useState(false)
@@ -44,7 +45,7 @@ export function ConversationPanel() {
           // 좌석 선호·접근성 창고에 저장 (좌석 추천에 쓰려고)
           setSeatPreferences(session.seatPreferences ?? [])
           setAccessibilityNeeds(session.accessibilityNeeds ?? [])
-          const buses = await searchBuses({
+                  const recs = await recommendBuses({
             departure: dep,
             arrival: arr,
             date: dt,
@@ -53,10 +54,10 @@ export function ConversationPanel() {
             servicePreference: session.servicePreference,
             busGradePreference: session.busGradePreference,
           })
-          if (buses.length === 0) {
+          if (recs.length === 0) {
             appSay('해당 조건의 버스를 찾지 못했습니다.')
           } else {
-            setBuses(buses)
+            setRecommendations(recs)
             setTimeout(() => setScreen('bus'), 800)
           }
         }

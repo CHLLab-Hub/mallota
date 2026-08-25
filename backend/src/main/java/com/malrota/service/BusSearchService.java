@@ -2,10 +2,12 @@ package com.malrota.service;
 
 import com.malrota.client.TagoClient;
 import com.malrota.dto.request.BusSearchRequest;
+import com.malrota.dto.response.BusRecommendation;
 import com.malrota.dto.response.BusSchedule;
 import org.springframework.stereotype.Service;
 
 import java.time.LocalTime;
+import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
 
@@ -40,6 +42,38 @@ public class BusSearchService {
                 .filter(schedule -> matchesGrade(schedule, request.busGradePreference()))
                 .sorted(scheduleComparator(request))
                 .toList();
+    }
+        /** 버스 3개 추천 (가장 가까운 시각 / 가장 저렴 / 근처 시각) */
+    public List<BusRecommendation> recommend(BusSearchRequest request) {
+        List<BusSchedule> schedules = search(request); // 조회+정렬 재활용
+        List<BusRecommendation> result = new ArrayList<>();
+        if (schedules.isEmpty()) return result;
+
+        // 1. 가장 맞는 시각 (정렬 결과 첫 번째)
+        BusSchedule best = schedules.get(0);
+        result.add(new BusRecommendation(best, "말씀하신 시간과 가장 가까운 버스입니다.", "추천 시간"));
+
+        // 2. 가장 저렴한 버스
+        BusSchedule cheapest = schedules.stream()
+                .min(Comparator.comparingInt(BusSchedule::charge))
+                .orElse(best);
+        if (!isSameBus(cheapest, best)) {
+            result.add(new BusRecommendation(cheapest, "가장 저렴한 버스입니다.", "최저가"));
+        }
+
+        // 3. 근처 시각 (1,2와 겹치지 않는 다음 버스)
+        for (BusSchedule s : schedules) {
+            if (!isSameBus(s, best) && !isSameBus(s, cheapest)) {
+                result.add(new BusRecommendation(s, "비슷한 시간대의 다른 버스입니다.", "다른 시간"));
+                break;
+            }
+        }
+        return result;
+    }
+
+    private boolean isSameBus(BusSchedule a, BusSchedule b) {
+        return a.routeId() != null && a.routeId().equals(b.routeId())
+                && a.departureTime() != null && a.departureTime().equals(b.departureTime());
     }
 
     private Comparator<BusSchedule> scheduleComparator(BusSearchRequest request) {
