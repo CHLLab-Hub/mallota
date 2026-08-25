@@ -19,16 +19,39 @@ public class ConversationParseService {
         this.watsonxClient = watsonxClient;
     }
 
-    public ConversationParseResponse parse(ConversationParseRequest request) {
+        public ConversationParseResponse parse(ConversationParseRequest request) {
         String prompt = buildPrompt(request.text());
         String rawAnswer = watsonxClient.ask(prompt);
 
         try {
             String json = extractJson(rawAnswer);
-            return objectMapper.readValue(json, ConversationParseResponse.class);
+            ConversationParseResponse parsed = objectMapper.readValue(json, ConversationParseResponse.class);
+            return cleanNullStrings(parsed); // "null" 문자열 정리
         } catch (Exception e) {
             throw new RuntimeException("watsonx 응답을 해석하지 못했습니다: " + rawAnswer, e);
         }
+    }
+
+    // "null", "", 공백 문자열을 진짜 null로 정리
+    private ConversationParseResponse cleanNullStrings(ConversationParseResponse r) {
+        return new ConversationParseResponse(
+                r.intent(),
+                clean(r.departure()),
+                clean(r.arrival()),
+                clean(r.date()),
+                clean(r.timePreference()),
+                r.passengers(),
+                r.seatPreferences(),
+                r.accessibilityNeeds(),
+                r.missingFields()
+        );
+    }
+
+    private String clean(String value) {
+        if (value == null) return null;
+        String trimmed = value.trim();
+        if (trimmed.isEmpty() || trimmed.equalsIgnoreCase("null")) return null;
+        return trimmed;
     }
 
     private String buildPrompt(String text) {

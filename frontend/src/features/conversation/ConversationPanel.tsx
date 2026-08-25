@@ -1,18 +1,12 @@
 import { useState } from 'react'
 import { parseConversation, searchBuses } from '../../api/conversationApi'
-import { recommendSeat } from '../../api/seatApi'
 import { speechToText, textToSpeech } from '../../api/voiceApi'
 import { ApiError } from '../../api/httpClient'
 import { useVoiceRecorder } from './useVoiceRecorder'
-import { SeatMap } from './SeatMap'
-import { BusTicket } from './BusTicket'
+import { useAppState } from './AppState'
 import logo from '../../assets/logo.png'
 import './ConversationPanel.css'
-import type {
-  ConversationSessionResult,
-  BusSchedule,
-  SeatRecommendation,
-} from './types'
+import type { ConversationSessionResult } from './types'
 
 function buildQuestion(session: ConversationSessionResult): string {
   if (!session.departure) return '어디에서 출발하시나요?'
@@ -21,59 +15,25 @@ function buildQuestion(session: ConversationSessionResult): string {
   return ''
 }
 
-function formatTime(raw: string): string {
-  if (!raw || raw.length < 12) return raw
-  const hour = parseInt(raw.substring(8, 10), 10)
-  const minute = raw.substring(10, 12)
-  const period = hour < 12 ? '오전' : '오후'
-  const displayHour = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour
-  return minute === '00' ? `${period} ${displayHour}시` : `${period} ${displayHour}시 ${minute}분`
-}
-
-function pickBusByTime(buses: BusSchedule[], timePref: string | null): BusSchedule {
-  if (!timePref || timePref === 'ANY') return buses[0]
-  const filtered = buses.filter((bus) => {
-    const hour = parseInt(bus.departureTime.substring(8, 10), 10)
-    if (timePref === 'MORNING') return hour >= 5 && hour < 12
-    if (timePref === 'AFTERNOON') return hour >= 12 && hour < 18
-    if (timePref === 'EVENING') return hour >= 18 || hour < 5
-    return true
-  })
-  return filtered.length > 0 ? filtered[0] : buses[0]
-}
-
-type Stage = 'chat' | 'payment' | 'ticket'
-type ChatMessage = { role: 'app' | 'user'; text: string }
-
 export function ConversationPanel() {
+  const {
+    sessionId, setSessionId,
+    messages, addMessage,
+    setBuses, setScreen,
+  } = useAppState()
+
   const [text, setText] = useState('')
-  const [sessionId, setSessionId] = useState<string | null>(null)
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    { role: 'app', text: '어디로 가실 예정인지 큰 목소리로 말씀해 주세요.' },
-  ])
   const [showInput, setShowInput] = useState(false)
   const [loading, setLoading] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [error, setError] = useState<string | null>(null)
-  const [bus, setBus] = useState<BusSchedule | null>(null)
-  const [seat, setSeat] = useState<SeatRecommendation | null>(null)
-  const [selectedSeat, setSelectedSeat] = useState<string | null>(null)
-  const [selecting, setSelecting] = useState(false)
-  const [stage, setStage] = useState<Stage>('chat')
 
   const { recording, startRecording, stopRecording } = useVoiceRecorder()
 
-  const finalSeatNo = selectedSeat ?? seat?.bestSeat?.seatNo ?? ''
-
-  // 대화에 메시지 추가
-  function addMessage(role: 'app' | 'user', text: string) {
-    setMessages((prev) => [...prev, { role, text }])
-  }
-
-  async function speak(text: string) {
-    if (!text.trim()) return
+  async function speak(t: string) {
+    if (!t.trim()) return
     try {
-      const data = await textToSpeech(text)
+      const data = await textToSpeech(t)
       if (data.audio) {
         const audio = new Audio('data:audio/mp3;base64,' + data.audio)
         await audio.play()
@@ -83,10 +43,9 @@ export function ConversationPanel() {
     }
   }
 
-  // 앱이 말하기 (말풍선 + 음성)
-  function appSay(text: string) {
-    addMessage('app', text)
-    speak(text)
+  function appSay(t: string) {
+    addMessage('app', t)
+    speak(t)
   }
 
   async function handleMicClick() {
@@ -96,9 +55,7 @@ export function ConversationPanel() {
       try {
         const audio = await stopRecording()
         const data = await speechToText(audio)
-        if (data.transcript) {
-          await handleSend(data.transcript)
-        }
+        if (data.transcript) await handleSend(data.transcript)
       } catch (e) {
         setError('음성 인식에 실패했습니다. 다시 시도해 주세요.')
       } finally {
@@ -118,11 +75,9 @@ export function ConversationPanel() {
     const sendText = (inputText ?? text).trim()
     if (!sendText) return
 
-    addMessage('user', sendText) // 사용자 말풍선
+    addMessage('user', sendText)
     setText('')
     setLoading(true)
-    setSelectedSeat(null)
-    setSelecting(false)
     setError(null)
 
     try {
@@ -131,8 +86,6 @@ export function ConversationPanel() {
 
       if (session.state === 'COLLECTING_CONDITIONS') {
         appSay(buildQuestion(session))
-        setBus(null)
-        setSeat(null)
       } else {
         const buses = await searchBuses({
           departure: session.departure!,
@@ -142,22 +95,10 @@ export function ConversationPanel() {
 
         if (buses.length === 0) {
           appSay('해당 조건의 버스를 찾지 못했습니다.')
-          setBus(null)
-          setSeat(null)
         } else {
-          const chosenBus = pickBusByTime(buses, session.timePreference)
-          setBus(chosenBus)
-
-          const seatData = await recommendSeat({
-            seatPreferences: session.seatPreferences,
-            accessibilityNeeds: session.accessibilityNeeds,
-            busGrade: chosenBus.grade,
-          })
-          setSeat(seatData)
-
-          appSay(
-            `${formatTime(chosenBus.departureTime)} 출발 ${chosenBus.grade} 버스를 추천합니다. 추천 좌석은 ${seatData.bestSeat?.seatNo ?? ''}번입니다.`,
-          )
+          appSay('조건에 맞는 버스를 찾았어요. 추천 버스를 보여드릴게요.')
+          setBuses(buses)
+          setTimeout(() => setScreen('bus'), 800) // 잠깐 뒤 버스 화면으로
         }
       }
     } catch (error) {
@@ -171,44 +112,8 @@ export function ConversationPanel() {
     }
   }
 
-  function reset() {
-    setStage('chat')
-    setBus(null)
-    setSeat(null)
-    setSelectedSeat(null)
-    setSelecting(false)
-    setSessionId(null)
-    setMessages([{ role: 'app', text: '어디로 가실 예정인지 큰 목소리로 말씀해 주세요.' }])
-  }
-
-  // 티켓 화면
-  if (stage === 'ticket' && bus) {
-    return <BusTicket bus={bus} seatNo={finalSeatNo} onClose={reset} />
-  }
-
-  // 결제 화면
-  if (stage === 'payment' && bus) {
-    return (
-      <div>
-        <h3>결제 확인</h3>
-        <div style={{ marginTop: '16px', fontSize: '1.1rem', lineHeight: 1.8 }}>
-          <div>{bus.departure} → {bus.arrival}</div>
-          <div>{formatTime(bus.departureTime)} 출발 · {bus.grade}</div>
-          <div>좌석: <b>{finalSeatNo}</b></div>
-          <div>결제 금액: <b>{bus.charge.toLocaleString()}원</b></div>
-        </div>
-        <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
-          <button className="send-button" type="button" onClick={() => setStage('chat')}>뒤로</button>
-          <button className="send-button" type="button" onClick={() => setStage('ticket')}>결제 확인</button>
-        </div>
-      </div>
-    )
-  }
-
-  // 대화 화면 (기본)
   return (
     <div>
-      {/* 대화 말풍선 */}
       <div className="chat-container">
         {messages.map((m, i) => (
           <div key={i} className={`chat-row ${m.role}`}>
@@ -220,37 +125,6 @@ export function ConversationPanel() {
 
       {error && <p style={{ color: 'red' }}>{error}</p>}
 
-      {/* 버스 정보 */}
-      {bus && (
-        <div style={{ marginTop: '16px' }}>
-          <h3>추천 버스</h3>
-          <p>{formatTime(bus.departureTime)} 출발 · {bus.grade} · {bus.charge.toLocaleString()}원 ({bus.departure} → {bus.arrival})</p>
-        </div>
-      )}
-
-      {/* 좌석 */}
-      {seat && seat.bestSeat && (
-        <div style={{ marginTop: '16px' }}>
-          <h3>추천 좌석: {finalSeatNo}</h3>
-          <ul>
-            {seat.reasons.map((reason, i) => (<li key={i}>{reason}</li>))}
-          </ul>
-          {!selecting && (
-            <button type="button" className="send-button" onClick={() => setSelecting(true)}>다른 좌석 선택하기</button>
-          )}
-          {selecting && <p style={{ color: '#f57f20' }}>앉고 싶은 좌석을 눌러주세요.</p>}
-          <SeatMap
-            seats={seat.allSeats}
-            recommendedNo={seat.bestSeat.seatNo}
-            alternativeNos={seat.alternatives.map((s) => s.seatNo)}
-            selectedNo={selectedSeat ?? undefined}
-            onSelect={selecting ? (s) => setSelectedSeat(s.seatNo) : undefined}
-          />
-          <button type="button" className="send-button" onClick={() => setStage('payment')}>결제하기</button>
-        </div>
-      )}
-
-      {/* 마이크 영역 */}
       <div className="mic-area">
         <button
           type="button"
