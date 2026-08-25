@@ -28,6 +28,21 @@ function formatTime(raw: string): string {
   return minute === '00' ? `${period} ${displayHour}시` : `${period} ${displayHour}시 ${minute}분`
 }
 
+// 시간대 선호에 맞는 버스 선택
+function pickBusByTime(buses: BusSchedule[], timePref: string | null): BusSchedule {
+  if (!timePref || timePref === 'ANY') return buses[0]
+
+  const filtered = buses.filter((bus) => {
+    const hour = parseInt(bus.departureTime.substring(8, 10), 10)
+    if (timePref === 'MORNING') return hour >= 5 && hour < 12
+    if (timePref === 'AFTERNOON') return hour >= 12 && hour < 18
+    if (timePref === 'EVENING') return hour >= 18 || hour < 5
+    return true
+  })
+
+  return filtered.length > 0 ? filtered[0] : buses[0]
+}
+
 type Stage = 'chat' | 'payment' | 'ticket'
 
 export function ConversationPanel() {
@@ -116,7 +131,7 @@ export function ConversationPanel() {
           setBus(null)
           setSeat(null)
         } else {
-          const chosenBus = buses[0]
+          const chosenBus = pickBusByTime(buses, session.timePreference)
           setBus(chosenBus)
 
           const seatData = await recommendSeat({

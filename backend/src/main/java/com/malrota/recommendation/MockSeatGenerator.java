@@ -11,39 +11,39 @@ public class MockSeatGenerator {
 
     private final Random random = new Random();
 
-    /** 등급에 맞는 좌석 배치 생성 */
     public List<Seat> generate(String grade) {
         String g = grade == null ? "" : grade;
 
         if (g.contains("우등")) {
-            // 우등: 1~8줄 3칸 + 9줄 4칸 = 28석
-            return build(8, 3, 4);
+            // 우등: 4열 격자, 평소 3칸, 마지막 행 4칸(3열 채움), 8+1줄
+            return build(8, 4, true);
         } else if (g.contains("프리미엄")) {
-            // 프리미엄: 1~7줄 3칸 = 21석 (뒷줄 추가 없음)
-            return build(7, 3, 3);
+            // 프리미엄: 4열 격자, 항상 3칸(3열 안 채움), 7줄
+            return build(7, 4, false);
         } else {
-            // 일반/고속: 1~10줄 4칸 + 11줄 5칸 = 45석
-            return build(10, 4, 5);
+            // 일반: 5열 격자, 평소 4칸, 마지막 행 5칸(3열 채움), 10+1줄
+            return build(10, 5, true);
         }
     }
 
-    // 등급 없이 호출하면 기본(우등)
     public List<Seat> generate() {
         return generate("우등");
     }
 
     /**
-     * normalRows: 일반 줄 수, colsPerRow: 한 줄 칸 수, lastRowCols: 마지막 줄 칸 수
+     * normalRows: 일반 줄 수
+     * totalCols: 격자 열 수 (우등/프리미엄 4, 일반 5)
+     * fillLastRow: 마지막 행에서 통로 열(3열)을 채우는지
+     * 통로는 항상 3열
      */
-    private List<Seat> build(int normalRows, int colsPerRow, int lastRowCols) {
+    private List<Seat> build(int normalRows, int totalCols, boolean fillLastRow) {
         List<Seat> seats = new ArrayList<>();
-        int totalRows = normalRows + 1; // 마지막 줄 포함
+        int totalRows = normalRows + 1;
+        int aisleCol = 3; // 통로는 항상 3열
 
         for (int row = 1; row <= totalRows; row++) {
             boolean isLastRow = (row == totalRows);
-            int cols = isLastRow ? lastRowCols : colsPerRow;
 
-            // 위치: 앞 1/3 FRONT, 중간 MIDDLE, 뒤 1/3 BACK
             String position;
             if (row <= totalRows / 3.0) {
                 position = "FRONT";
@@ -53,31 +53,26 @@ public class MockSeatGenerator {
                 position = "BACK";
             }
 
-            for (int col = 1; col <= cols; col++) {
-                String seatNo = row + colLetter(col);
-                String side = decideSide(col, cols);
-                boolean available = random.nextInt(10) < 7; // 약 70% 빈자리
-                seats.add(new Seat(seatNo, row, col, position, side, available));
+            char letter = 'A';
+            for (int displayCol = 1; displayCol <= totalCols; displayCol++) {
+                // 통로 열(3열)은 평소엔 비움. 마지막 행 & fillLastRow면 채움
+                boolean isAisle = (displayCol == aisleCol);
+                if (isAisle && !(isLastRow && fillLastRow)) {
+                    continue; // 이 자리는 좌석 없음 (통로)
+                }
+
+                String seatNo = row + String.valueOf(letter);
+                String side = decideSide(displayCol, totalCols);
+                boolean available = random.nextInt(10) < 7;
+                seats.add(new Seat(seatNo, row, displayCol, position, side, available));
+                letter++;
             }
         }
         return seats;
     }
 
-    // 칸 번호 → 알파벳 (1=A, 2=B, ...)
-    private String colLetter(int col) {
-        return String.valueOf((char) ('A' + col - 1));
-    }
-
-    // 창가/통로 결정
-    // 3칸 배치: [A창][B통] [C창]  → 1=창가, 2=통로, 3=창가
-    // 4칸 배치: [A창][B통] [C통][D창] → 1=창가, 끝=창가, 나머지 통로
-    private String decideSide(int col, int totalCols) {
-        if (totalCols <= 3) {
-            // 3칸: 1번(A)과 3번(C)이 창가
-            return (col == 1 || col == 3) ? "WINDOW" : "AISLE";
-        } else {
-            // 4칸 이상: 맨 왼쪽(1)과 맨 오른쪽(totalCols)이 창가
-            return (col == 1 || col == totalCols) ? "WINDOW" : "AISLE";
-        }
+    // 창가/통로 결정: 맨 왼쪽(1)과 맨 오른쪽(totalCols)이 창가
+    private String decideSide(int displayCol, int totalCols) {
+        return (displayCol == 1 || displayCol == totalCols) ? "WINDOW" : "AISLE";
     }
 }
