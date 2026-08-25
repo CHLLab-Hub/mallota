@@ -31,7 +31,7 @@ public class TagoClient {
         register("NAEK030", "동서울", "강변");
         register("NAEK040", "서울남부", "남부터미널");
 
-        // [대구권] ⭐ 대구 입력 시 동대구(NAEK801)로 정확 매핑
+        // [대구권] 대구 입력 시 동대구(NAEK801)로 정확 매핑
         register("NAEK801", "동대구", "대구", "동대구복합", "동대구환승센터", "대구고속");
         register("NAEK803", "서대구", "서대구고속", "만평");
         register("NAEK805", "대구북부", "북부정류장");
