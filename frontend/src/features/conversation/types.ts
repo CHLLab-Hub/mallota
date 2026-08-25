@@ -62,7 +62,12 @@ export interface ConversationSessionResult {
   departure: string | null
   arrival: string | null
   date: string | null
+  departureTime: string | null
   timePreference: string | null
+  servicePreference: string | null
+  busGradePreference: string | null
+  passengers: number
+  clarificationPrompt: string | null
   seatPreferences: SeatPreference[]
   accessibilityNeeds: AccessibilityNeed[]
   selectedBusId: string | null

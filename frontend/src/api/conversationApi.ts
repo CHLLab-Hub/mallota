@@ -24,7 +24,15 @@ export function parseConversation(text: string, sessionId: string | null, signal
 
 // 조건이 다 모이면 버스 조회
 export function searchBuses(
-  body: { departure: string; arrival: string; date: string },
+  body: {
+    departure: string
+    arrival: string
+    date: string
+    departureTime?: string | null
+    timePreference?: string | null
+    servicePreference?: string | null
+    busGradePreference?: string | null
+  },
   signal?: AbortSignal,
 ) {
   return request<BusSchedule[]>('/api/buses/search', {

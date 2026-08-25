@@ -39,7 +39,29 @@ public class SeatRecommendService {
             int score = 0;
             List<String> reasons = new ArrayList<>();
 
-            // 정책 문서의 점수표
+            // 사용자가 직접 말한 위치 선호를 우선한다.
+            if (prefs.contains("FRONT") && seat.position().equals("FRONT")) {
+                score += 6;
+                reasons.add("앞쪽 좌석을 선호하셔서 앞쪽 좌석입니다.");
+            }
+            if (prefs.contains("MIDDLE") && seat.position().equals("MIDDLE")) {
+                score += 6;
+                reasons.add("중간 좌석을 선호하셔서 중간 좌석입니다.");
+            }
+            if (prefs.contains("BACK") && seat.position().equals("BACK")) {
+                score += 6;
+                reasons.add("뒷좌석을 선호하셔서 뒤쪽 좌석입니다.");
+            }
+            if (prefs.contains("AISLE") && seat.side().equals("AISLE")) {
+                score += 4;
+                reasons.add("통로를 선호하셔서 이동이 편한 통로 쪽 좌석입니다.");
+            }
+            if (prefs.contains("WINDOW") && seat.side().equals("WINDOW")) {
+                score += 4;
+                reasons.add("창가를 선호하셔서 창가 좌석입니다.");
+            }
+
+            // 교통약자·안전 관련 조건
             if (access.contains("WALKING_DIFFICULTY") && seat.position().equals("FRONT")) {
                 score += 5;
                 reasons.add("다리가 불편하셔서 타고 내리기 쉬운 앞쪽 좌석입니다.");
@@ -48,13 +70,13 @@ public class SeatRecommendService {
                 score += 3;
                 reasons.add("이동이 편한 통로 쪽 좌석입니다.");
             }
-            if (prefs.contains("WINDOW") && seat.side().equals("WINDOW")) {
-                score += 3;
-                reasons.add("창가를 선호하셔서 창가 좌석입니다.");
-            }
             if (access.contains("MOTION_SICKNESS") && seat.position().equals("FRONT")) {
                 score += 4;
                 reasons.add("멀미가 있으셔서 흔들림이 적은 앞쪽 좌석입니다.");
+            }
+            if (access.contains("ELDERLY_CARE") && seat.position().equals("FRONT")) {
+                score += 4;
+                reasons.add("어르신이 이용하기 편하도록 앞쪽 좌석을 우선합니다.");
             }
 
             if (score > bestScore) {

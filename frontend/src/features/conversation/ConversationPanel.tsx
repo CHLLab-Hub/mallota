@@ -96,7 +96,7 @@ export function ConversationPanel() {
       setText('')
 
       if (session.state === 'COLLECTING_CONDITIONS') {
-        const question = buildQuestion(session)
+        const question = session.clarificationPrompt ?? buildQuestion(session)
         setMessage(question)
         speak(question)
         setBus(null)
@@ -107,6 +107,10 @@ export function ConversationPanel() {
           departure: session.departure!,
           arrival: session.arrival!,
           date: session.date!,
+          departureTime: session.departureTime,
+          timePreference: session.timePreference,
+          servicePreference: session.servicePreference,
+          busGradePreference: session.busGradePreference,
         })
 
         if (buses.length === 0) {

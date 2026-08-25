@@ -25,7 +25,14 @@ public class ConversationSession {
     private String departure;
     private String arrival;
     private String date;
+    private String departureTime;
     private String timePreference;
+    private String servicePreference;
+    private String busGradePreference;
+    @Builder.Default
+    private int passengers = 1;
+
+    private String clarificationPrompt;
 
     @Builder.Default
     private List<String> seatPreferences = new ArrayList<>();
@@ -61,23 +68,26 @@ public class ConversationSession {
         }
     }
 
-    /** 새로 추출된 조건 병합 (Overwrite & Merge) */
-    public void mergeConditions(String departure, String arrival, String date, String timePreference,
-                                List<String> seatPrefs, List<String> accessNeeds) {
+    /** 새로 추출된 조건 병합. 파서가 세션의 기존 값을 반영한 완성 상태를 전달한다. */
+    public void mergeConditions(String departure, String arrival, String date, String departureTime,
+                                String timePreference, String servicePreference, String busGradePreference,
+                                int passengers, List<String> seatPrefs, List<String> accessNeeds,
+                                String clarificationPrompt) {
         if (departure != null && !departure.isBlank()) this.departure = departure;
         if (arrival != null && !arrival.isBlank()) this.arrival = arrival;
         if (date != null && !date.isBlank()) this.date = date;
+        if (departureTime != null && !departureTime.isBlank()) this.departureTime = departureTime;
         if (timePreference != null && !timePreference.isBlank()) this.timePreference = timePreference;
+        if (servicePreference != null && !servicePreference.isBlank()) this.servicePreference = servicePreference;
+        if (busGradePreference != null && !busGradePreference.isBlank()) this.busGradePreference = busGradePreference;
+        if (passengers > 0) this.passengers = passengers;
 
         if (seatPrefs != null) {
-            for (String pref : seatPrefs) {
-                if (!this.seatPreferences.contains(pref)) this.seatPreferences.add(pref);
-            }
+            this.seatPreferences = new ArrayList<>(seatPrefs);
         }
         if (accessNeeds != null) {
-            for (String need : accessNeeds) {
-                if (!this.accessibilityNeeds.contains(need)) this.accessibilityNeeds.add(need);
-            }
+            this.accessibilityNeeds = new ArrayList<>(accessNeeds);
         }
+        this.clarificationPrompt = clarificationPrompt;
     }
 }
