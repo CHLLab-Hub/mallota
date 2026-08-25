@@ -7,11 +7,13 @@
 # Frontend
 frontend/node_modules/
 frontend/build/
+frontend/build-*/
 frontend/coverage/
 
 # Backend
 backend/.gradle/
 backend/build/
+backend/build-*/
 backend/target/
 
 # AI
