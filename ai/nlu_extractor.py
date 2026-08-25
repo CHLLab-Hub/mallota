@@ -34,7 +34,7 @@ class WatsonxNluExtractor:
         self.api_key = os.getenv("WATSONX_API_KEY")
         self.project_id = os.getenv("WATSONX_PROJECT_ID")
         self.url = os.getenv("WATSONX_URL", "https://us-south.ml.cloud.ibm.com")
-        self.model_id = "ibm/granite-3-8b-instruct"
+        self.model_id = 'meta-llama/llama-3-3-70b-instruct'
 
     def extract(self, req: ConversationParseRequest) -> ConversationParseResponse:
         now = datetime.now()
@@ -116,7 +116,7 @@ class WatsonxNluExtractor:
 
         parameters = {
             GenParams.DECODING_METHOD: "greedy",
-            GenParams.MAX_NEW_TOKENS: 300,
+            GenParams.MAX_NEW_TOKENS: 200,
             GenParams.TEMPERATURE: 0.0,
         }
 
@@ -133,7 +133,7 @@ class WatsonxNluExtractor:
     def _build_prompt(self, text: str, iso_datetime: str, current_state_json: str) -> str:
 
         return f"""당신은 고령자(디지털 소외계층) 및 교통약자를 위한 고속버스 예매 서비스의 자연어 조건 추출(NLU) 인공지능입니다.
-        공손하고 차분한 어투로 차근차근 설명해줘야 하고, 사용자 음성에서 추출한 조건을 절대 넘겨 짚지 않아야 합니다.
+        고령자(디지털 소외계층) 및 교통약자를 대상으로 하기 떄문에 공손하고 차분한 어투로 차근차근 설명해줘야 합니다.
         사용자 발화와 기존 수집 정보를 해석하여, 아래에 정의된 JSON 객체만 반환하세요.
         설명, Markdown, 코드 블록, 추가 문장, 질문을 절대 출력하지 마세요.
 
@@ -176,11 +176,39 @@ class WatsonxNluExtractor:
         [날짜와 시간 규칙]
         - 오늘, 내일, 모레 등 명확한 상대 날짜는 기준 시각을 사용해 YYYY-MM-DD로 변환합니다.
         - 명확한 날짜가 기준일보다 과거라면 임의로 미래 날짜로 변경하지 말고 date를 null로 반환합니다.
-        - "오전 10시", "오후 3시"처럼 명확한 시각은 departureTime에 HH:MM 형식으로 반환합니다.
+        - "오전 10시", "오후 3시", "저녁 7시", "아침 8시"처럼 명확한 시각은 departureTime에 HH:MM 형식으로 반환합니다.
         - "오전", "아침"은 MORNING, "오후"는 AFTERNOON, "저녁"은 EVENING, "밤/야간"은 NIGHT로 반환합니다.
         - "첫차"는 servicePreference: FIRST, "막차"는 servicePreference: LAST로 반환합니다.
         - 특정 시각이 없는 경우 departureTime은 null입니다.
         - 모호한 시간 표현을 임의의 특정 시각으로 바꾸지 마세요.
+
+        [지명/터미널 규칙]
+        - '~행'(예: 부산행, 대전행)은 도착지(arrival)이며, 접미사 '행'을 뺀 지역명만 추출합니다.
+        - '~발'(예: 서울발)은 출발지(departure)이며, 접미사 '발'을 뺀 지역명만 추출합니다.
+
+        [고령자/어르신 특화 어휘 해석 규칙]
+        1. 동행 및 가족 호칭 (인원수 & 배려 요구):
+        - 표준: "할머니", "할아버지", "어머니", "아버지", "부모님", "손주", "손자", "손녀"
+        - 경상/전라/충청: "영감", "영감탱이", "영감재이"/"영감쟁이"(영감/영감탱이), "바깥양반", "안사람", "집사람", "할멈", "딸래미", "아들래미", "손주 녀석"
+        - 제주 방언: "손지"(손주), "할망"(할머니), "하르방"(할아버지), "고치"(함께/같이), "삼춘"
+        - 강원 방언: "할아바이"(할아버지), "할마이"(할머니), "아즈바이"(아저씨/삼촌)
+        - 위 호칭과 함께 "~랑/~하고/데리고/모시고/둘이/탈 건데/갈 건데/데리고/데꼬/고치/둘이/나란히" 등의 동행 표현이 있으면:
+            * passengers: 2 (2명 이상으로 계산)
+            *  accessibilityNeeds에 "ELDERLY_CARE" 추가
+        2. 신체 불편 및 통증 표현:
+        - "도가니(무릎)", "시큰시큰", "삭신이 쑤심", "다리 절임", "관절", "지팡이", "계단 힘듦", "하영 힘들다게"
+            * accessibilityNeeds에 "WALKING_DIFFICULTY" 추가
+            * seatPreferences에 "FRONT" (앞쪽) 우선 배정
+        3. 멀미 및 어지럼 표현:
+        - "속 울렁울렁행", "메스꺼우니까네", "차 타면 토해", "옴팡지게 멀미"
+            * accessibilityNeeds에 "MOTION_SICKNESS" 추가
+            * seatPreferences에 "MIDDLE" (중간) 우선 배정
+        4. 사투리 시간 및 속도 표현:
+        - "시방", "싸게싸게", "젤 빠른 거", "일찍이" -> servicePreference: "FIRST"
+        - "점심 묵고", "낮참에" -> timePreference: "AFTERNOON"
+        - "해 질 녘", "어스름할 때", "땅거미 질 때" -> timePreference: "EVENING"
+        - "꼭두새벽", "새벽녘" -> timePreference: "MORNING" 또는 servicePreference: "FIRST"
+        - "글피" -> 3일 뒤 날짜, "그글피" -> 4일 뒤 날짜
 
         [선호값 규칙]
         - timePreference:
@@ -226,29 +254,31 @@ class WatsonxNluExtractor:
         "accessibilityNeeds": []
         }}
 
-        [예시 1]
+        [예시 1 - 표준 발화 및 보행 배려]
         기준 시각: 2026-08-24T10:00:00+09:00
         기존 수집 정보: {{}}
         사용자: "내일 오전 서울에서 대전 가는데 우등으로, 다리가 불편해서 앞쪽 창가로 줘"
         결과:
         {{"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"EXCELLENT","passengers":1,"seatPreferences":["FRONT","WINDOW"],"accessibilityNeeds":["WALKING_DIFFICULTY"]}}
 
-        [예시 2]
+        [예시 2 - 사투리 발화 및 손주 동행]
         기준 시각: 2026-08-24T10:00:00+09:00
         기존 수집 정보: {{}}
-        사용자: "부산 가는 첫차 찾아줘"
+        사용자: "손주 아 데꼬 부산행 젤 빠른 거 둘이 탈 건데 계단 타기 하영 힘들어"
         결과:
-        {{"intent":"BUS_SEARCH","departure":null,"arrival":"부산","date":null,"departureTime":null,"timePreference":"ANY","servicePreference":"FIRST","busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[]}}
+        {{"intent":"BUS_SEARCH","departure":null,"arrival":"부산","date":null,"departureTime":null,"timePreference":"ANY","servicePreference":"FIRST","busGradePreference":"ANY","passengers":2,"seatPreferences":["FRONT"],"accessibilityNeeds":["WALKING_DIFFICULTY","ELDERLY_CARE"]}}
 
-        [예시 3]
+        [예시 3 - 멀티턴 상태 수정]
         기준 시각: 2026-08-24T10:00:00+09:00
-        기존 수집 정보:
-        {{"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"EXCELLENT","passengers":1,"seatPreferences":[],"accessibilityNeeds":[]}}
-        사용자: "우등 말고 아무거나 괜찮아"
+        기존 수집 정보: {{"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"EXCELLENT","passengers":1,"seatPreferences":["FRONT"],"accessibilityNeeds":["WALKING_DIFFICULTY"]}}
+        사용자: "우등 말고 젤 싼 일반으로 바꿔줘"
         결과:
-        {{"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[]}}
-
+        {{"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"GENERAL","passengers":1,"seatPreferences":["FRONT"],"accessibilityNeeds":["WALKING_DIFFICULTY"]}}
+                
         [실제 입력]
+        기준 시각: {iso_datetime}
+        기존 수집 정보: {current_state_json}
+        사용자: "{text}"
         결과:
         """
     
@@ -351,13 +381,29 @@ class WatsonxNluExtractor:
         elif "오늘" in text: res["date"] = base_dt.strftime("%Y-%m-%d")
 
         # 명확한 시각 (예: 오전 10시, 오후 3시 반, 14시)
-        m_exact_time = re.search(r"(오전|오후)?\s*(\d{1,2})\s*시\s*(?:(\d{1,2})\s*분|반)?", text)
+        m_exact_time = re.search(r"(새벽|아침|낮|점심|저녁|밤|오전|오후|)?\s*(\d{1,2})\s*시\s*(?:(\d{1,2})\s*분|반)?", text)
         if m_exact_time:
             ampm, h_str, m_str = m_exact_time.group(1), int(m_exact_time.group(2)), m_exact_time.group(3)
             minute = 30 if "반" in text else (int(m_str) if m_str else 0)
-            if ampm == "오후" and h_str < 12: h_str += 12
-            elif ampm == "오전" and h_str == 12: h_str = 0
+            if ampm in ["오후", "저녁", "밤"] and h_str < 12:
+                h_str += 12
+            elif ampm in ["낮", "점심"] and 1 <= h_str <= 6:
+                h_str += 12
+            elif ampm in ["오전", "새벽", "아침"] and h_str == 12:
+                h_str = 0
+
             res["departureTime"] = f"{h_str:02d}:{minute:02d}"
+
+            if 0 <= h_str < 6:
+                res["timePreference"] = "NIGHT"
+            elif 6 <= h_str < 10:
+                res["timePreference"] = "MORNING"
+            elif 10 <= h_str < 17:
+                res["timePreference"] = "AFTERNOON"
+            elif 17 <= h_str < 21:
+                res["timePreference"] = "EVENING"
+            else:
+                res["timePreference"] = "NIGHT"
 
         # 첫차 / 막차
         if "첫차" in text: res["servicePreference"] = "FIRST"
