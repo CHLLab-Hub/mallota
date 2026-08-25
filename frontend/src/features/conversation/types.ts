@@ -14,3 +14,58 @@ export interface SearchCondition {
   accessibilityNeeds: AccessibilityNeed[]
   missingFields: Array<'departure' | 'arrival' | 'date'>
 }
+
+export interface BusSchedule {
+  routeId: string
+  grade: string
+  departure: string
+  arrival: string
+  departureTime: string
+  arrivalTime: string
+  charge: number
+}
+
+export interface ConversationSearchResult {
+  condition: SearchCondition
+  buses: BusSchedule[]
+  searched: boolean
+}
+
+export interface Seat {
+  seatNo: string
+  row: number
+  column: number
+  position: string
+  side: string
+  available: boolean
+}
+
+export interface SeatRecommendation {
+  bestSeat: Seat | null
+  score: number
+  reasons: string[]
+  alternatives: Seat[]
+  allSeats: Seat[]
+}
+
+export type ConversationStateValue =
+  | 'COLLECTING_CONDITIONS'
+  | 'READY_TO_SEARCH'
+  | 'BUS_SELECTED'
+  | 'SEAT_RECOMMENDED'
+  | 'AWAITING_CONFIRMATION'
+  | 'BOOKED'
+
+export interface ConversationSessionResult {
+  sessionId: string
+  state: ConversationStateValue
+  departure: string | null
+  arrival: string | null
+  date: string | null
+  timePreference: string | null
+  seatPreferences: SeatPreference[]
+  accessibilityNeeds: AccessibilityNeed[]
+  selectedBusId: string | null
+  recommendedSeatNo: string | null
+  bookingId: string | null
+}
