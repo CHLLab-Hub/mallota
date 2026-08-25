@@ -1,5 +1,6 @@
 import { StatusCard } from '../components/common/StatusCard'
 import { ConversationPanel } from '../features/conversation/ConversationPanel'
+import logo from '../assets/logo.png'
 
 const setupItems = [
   {
@@ -21,11 +22,8 @@ export function HomePage() {
     <main className="app-shell">
       <header className="site-header">
         <div className="brand">
-          <span className="brand-mark" aria-hidden="true">
-            🚌
-          </span>
-          <span>말로타</span>
-        </div>
+  <img src={logo} alt="말로타" style={{ height: '48px' }} />
+</div>
         <span className="setup-badge">Project scaffold</span>
       </header>
 
