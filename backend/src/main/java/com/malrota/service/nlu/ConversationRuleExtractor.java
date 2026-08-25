@@ -1,7 +1,6 @@
 package com.malrota.service.nlu;
 
 import org.springframework.stereotype.Component;
-
 import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
@@ -16,8 +15,19 @@ import java.util.regex.Pattern;
  */
 @Component
 public class ConversationRuleExtractor {
+    
+    // 전국의 세부 터미널명과 별칭(강남, 사상, 유스퀘어, 센트럴, 노포 등)을 모두 등록하는 위치
+    private static final String TERMINALS = 
+            "서울경부|센트럴시티|센트럴|동서울|서울남부|서울|강남|고터|" +
+            "동대구|서대구|대구북부|대구서부|대구|" +
+            "부산종합|부산서부|사상|해운대|부산|노포|" +
+            "대전복합|유성고속|대전청사|유성|대전|" +
+            "광주종합|유스퀘어|광주|" +
+            "인천종합|인천|수원종합|수원|성남종합|성남|야탑|" +
+            "청주고속|북청주|청주|천안고속|천안|전주고속|전주|" +
+            "강릉고속|강릉|원주고속|원주|속초고속|속초|포항고속|포항|창원고속|창원|마산고속|마산|완도";
 
-    private static final String TERMINALS = "동서울|서울경부|서울|대전복합|대전|부산|광주|대구|강릉|속초|전주|원주|천안|완도";
+    // 아래 DEPARTURE_PATTERN과 ARRIVAL_PATTERN이 위 TERMINALS를 자동으로 참조합니다.
     private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(?:출발(?:지)?[:\\s]*)?(" + TERMINALS + ")\\s*(?:에서|서|발)");
     private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))");
     

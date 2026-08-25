@@ -16,7 +16,7 @@ function buildQuestion(session: ConversationSessionResult): string {
   if (!session.departure) return '어디에서 출발하시나요?'
   if (!session.arrival) return '어디로 가시나요?'
   if (!session.date) return '언제 출발하시나요?'
-  return ''
+  return '몇 시쯤 출발하는 버스를 원하시나요?'
 }
 
 function formatTime(raw: string): string {
@@ -95,45 +95,58 @@ export function ConversationPanel() {
       setSessionId(session.sessionId)
       setText('')
 
-      if (session.state === 'COLLECTING_CONDITIONS') {
-        const question = session.clarificationPrompt ?? buildQuestion(session)
+      // 백엔드가 보낸 질문(누락 질문 또는 약자/좌석 배려 질문)이 있으면 우선 질문하고 대기!
+      if (session.clarificationPrompt) {
+        setMessage(session.clarificationPrompt)
+        speak(session.clarificationPrompt)
+        setBus(null)
+        setSeat(null)
+        return
+      }
+
+      // 필수값이 비어있는 경우 (백업)
+      if (!session.departure || !session.arrival || !session.date) {
+        const question = buildQuestion(session)
         setMessage(question)
         speak(question)
         setBus(null)
         setSeat(null)
+        return
+      }
+
+      // 더 이상 질문할 것이 없을 때 비로소 버스 조회 및 좌석 추천 진행
+      setMessage('조건이 모두 확인되었습니다. 최적의 버스와 좌석을 찾고 있어요...')
+      const buses = await searchBuses({
+        departure: session.departure!,
+        arrival: session.arrival!,
+        date: session.date!,
+        departureTime: session.departureTime,
+        timePreference: session.timePreference,
+        servicePreference: session.servicePreference,
+        busGradePreference: session.busGradePreference,
+      })
+
+      if (buses.length === 0) {
+        const msg = '해당 조건의 버스를 찾지 못했습니다. 다른 시간대를 말씀해 주세요.'
+        setMessage(msg)
+        speak(msg)
+        setBus(null)
+        setSeat(null)
       } else {
-        setMessage('조건이 모두 확인되었습니다. 버스를 찾고 있어요...')
-        const buses = await searchBuses({
-          departure: session.departure!,
-          arrival: session.arrival!,
-          date: session.date!,
-          departureTime: session.departureTime,
-          timePreference: session.timePreference,
-          servicePreference: session.servicePreference,
-          busGradePreference: session.busGradePreference,
+        const chosenBus = buses[0]
+        setBus(chosenBus)
+
+        const seatData = await recommendSeat({
+          seatPreferences: session.seatPreferences,
+          accessibilityNeeds: session.accessibilityNeeds,
+          busGrade: chosenBus.grade,
         })
+        setSeat(seatData)
 
-        if (buses.length === 0) {
-          const msg = '해당 조건의 버스를 찾지 못했습니다.'
-          setMessage(msg)
-          speak(msg)
-          setBus(null)
-          setSeat(null)
-        } else {
-          const chosenBus = buses[0]
-          setBus(chosenBus)
-
-          const seatData = await recommendSeat({
-            seatPreferences: session.seatPreferences,
-            accessibilityNeeds: session.accessibilityNeeds,
-            busGrade: chosenBus.grade,
-          })
-          setSeat(seatData)
-
-          const msg = `${formatTime(chosenBus.departureTime)} 출발 ${chosenBus.grade} 버스를 추천합니다. 추천 좌석은 ${seatData.bestSeat?.seatNo ?? ''}번입니다.`
-          setMessage(msg)
-          speak(msg)
-        }
+        const reasonText = seatData.reasons && seatData.reasons.length > 0 ? seatData.reasons[0] : ''
+        const msg = `${formatTime(chosenBus.departureTime)} 출발 ${chosenBus.grade} 버스입니다. ${reasonText} 추천 좌석은 ${seatData.bestSeat?.seatNo ?? ''}번입니다.`
+        setMessage(msg)
+        speak(msg)
       }
     } catch (error) {
       if (error instanceof ApiError) {

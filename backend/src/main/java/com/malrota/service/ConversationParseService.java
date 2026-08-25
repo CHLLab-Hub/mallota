@@ -78,7 +78,9 @@ public class ConversationParseService {
                 llm == null ? null : llm.accessibilityNeeds(), rules.accessibilityNeeds(), rules.accessibilityMentioned());
 
         List<String> missing = missingRequired(departure, arrival, date, departureTime, timePreference);
-        String prompt = clarificationPrompt(missing, departure, arrival);
+        
+        // ⭐ 깔끔하게 정리된 반문 생성 호출
+        String prompt = clarificationPrompt(missing, departure, arrival, seatPreferences, accessibilityNeeds);
 
         return new ConversationParseResponse(
                 intent, nullIfBlank(departure), nullIfBlank(arrival), nullIfBlank(date),
@@ -114,27 +116,39 @@ public class ConversationParseService {
         return missing;
     }
 
-    private String clarificationPrompt(List<String> missing, String departure, String arrival) {
-        if (missing.isEmpty()) return null;
-        if (missing.contains("departure") && missing.contains("arrival")) {
-            return "어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.";
+    private String clarificationPrompt(List<String> missing, String departure, String arrival, 
+                                       List<String> seatPrefs, List<String> accessNeeds) {
+        // 필수값(출발/도착/날짜/시간) 누락 시 질문
+        if (!missing.isEmpty()) {
+            if (missing.contains("departure") && missing.contains("arrival")) {
+                return "어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.";
+            }
+            if (missing.contains("departure")) {
+                return (arrival != null && !arrival.isBlank() ? arrival + "행 " : "") + "버스를 탈 출발 터미널을 말씀해 주세요. (강남/동서울 등)";
+            }
+            if (missing.contains("arrival")) {
+                return (departure != null && !departure.isBlank() ? departure + "에서 " : "") + "어디로 가시나요?";
+            }
+            if (missing.contains("date") && missing.contains("timePreference")) {
+                return "언제 출발하시나요? '내일 아침', '이번 주말 오후'처럼 날짜와 시간대를 편하게 말씀해 주세요.";
+            }
+            if (missing.contains("date")) {
+                return "출발하시는 날짜를 말씀해 주세요. '오늘', '내일', '이번 주 토요일'처럼 말씀하셔도 됩니다.";
+            }
+            if (missing.contains("timePreference")) {
+                return "몇 시쯤 출발하는 버스를 원하시나요? '오전 9시', '오후 3시', '첫차', '막차'처럼 말씀해 주세요.";
+            }
         }
-        if (missing.contains("departure")) {
-            return (arrival != null ? arrival + "행" : "버스") + "를 찾을 출발지를 말씀해 주세요.";
+
+        // 필수값 4개가 모두 찼지만, 약자/좌석 조건이 비어있는 경우 -> 배려 질문 생성!
+        boolean hasNoPreferences = (seatPrefs == null || seatPrefs.isEmpty()) && (accessNeeds == null || accessNeeds.isEmpty());
+        if (hasNoPreferences) {
+            String depStr = (departure != null && !departure.isBlank()) ? departure + "에서 " : "";
+            String arrStr = (arrival != null && !arrival.isBlank()) ? arrival + " 가는 " : "";
+            return depStr + arrStr + "표를 찾을게요. 혹시 다리가 불편하시거나 창가/통로 등 더 편하신 자리가 있으신가요?";
         }
-        if (missing.contains("arrival")) {
-            return (departure != null ? departure + "에서" : "") + " 어디로 가시나요?";
-        }
-        if (missing.contains("date") && missing.contains("timePreference")) {
-            return "언제 출발하시나요? '내일 아침', '이번 주말 오후'처럼 편하게 말씀해 주세요.";
-        }
-        if (missing.contains("date")) {
-            return "언제 출발하시나요? 오늘, 내일, 이번 주 토요일처럼 말씀해 주세요.";
-        }
-        if (missing.contains("timePreference")) {
-            return "몇 시쯤 출발하는 버스를 원하시나요? '오전 9시', '오후 2시', '첫차', '막차'처럼 말씀해 주세요.";
-        }
-        return "출발 정보를 말씀해 주시면 바로 찾아드릴게요.";
+
+        return null;
     }
 
     private String buildPrompt(String text, String isoDateTime, ConversationSession session) {
