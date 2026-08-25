@@ -21,7 +21,12 @@ public class ConversationSessionResponse {
     private String departure;
     private String arrival;
     private String date;
+    private String departureTime;
     private String timePreference;
+    private String servicePreference;
+    private String busGradePreference;
+    private int passengers;
+    private String clarificationPrompt;
 
     private List<String> seatPreferences;
     private List<String> accessibilityNeeds;
@@ -38,7 +43,12 @@ public class ConversationSessionResponse {
                 .departure(session.getDeparture())
                 .arrival(session.getArrival())
                 .date(session.getDate())
+                .departureTime(session.getDepartureTime())
                 .timePreference(session.getTimePreference())
+                .servicePreference(session.getServicePreference())
+                .busGradePreference(session.getBusGradePreference())
+                .passengers(session.getPassengers())
+                .clarificationPrompt(session.getClarificationPrompt())
                 .seatPreferences(session.getSeatPreferences())
                 .accessibilityNeeds(session.getAccessibilityNeeds())
                 .selectedBusId(session.getSelectedBusId())

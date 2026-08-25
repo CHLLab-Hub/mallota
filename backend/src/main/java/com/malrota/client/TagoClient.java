@@ -9,9 +9,7 @@ import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
 import java.net.URI;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Map;
+import java.util.*;
 
 @Slf4j
 @Component
@@ -21,62 +19,112 @@ public class TagoClient {
     private final RestClient restClient = RestClient.create();
     private final ObjectMapper objectMapper = new ObjectMapper();
 
-    // Map.ofEntries로 10개 초과 오류 해결
-    private static final Map<String, String> TERMINAL_MAP = Map.ofEntries(
-            Map.entry("서울", "NAEK010"),
-            Map.entry("서울경부", "NAEK010"),
-            Map.entry("센트럴시티", "NAEK020"),
-            Map.entry("동서울", "NAEK030"),
-            Map.entry("대전", "NAEK300"),
-            Map.entry("대전복합", "NAEK300"),
-            Map.entry("부산", "NAEK700"),
-            Map.entry("부산노포", "NAEK700"),
-            Map.entry("서부산", "NAEK705"),
-            Map.entry("대구", "NAEK800"),
-            Map.entry("광주", "NAEK500")
-    );
+    // 1. 전국 복수 세부 터미널 및 별칭 전체 매핑 테이블 (TAGO 고속버스 터미널 ID)
+    private static final Map<String, String> TERMINAL_MAP = new LinkedHashMap<>();
+    // 역방향 ID -> 터미널명 매핑 (Mock 생성 및 로깅용)
+    private static final Map<String, String> ID_TO_NAME_MAP = new LinkedHashMap<>();
+
+    static {
+        // [서울권]
+        register("NAEK010", "서울경부", "서울", "강남", "고터", "강남고속", "서울고속");
+        register("NAEK020", "센트럴시티", "센트럴", "강남호남", "호남선");
+        register("NAEK030", "동서울", "강변");
+        register("NAEK040", "서울남부", "남부터미널");
+
+        // [대구권] 대구 입력 시 동대구(NAEK801)로 정확 매핑
+        register("NAEK801", "동대구", "대구", "동대구복합", "동대구환승센터", "대구고속");
+        register("NAEK803", "서대구", "서대구고속", "만평");
+        register("NAEK805", "대구북부", "북부정류장");
+        register("NAEK807", "대구서부", "서부정류장");
+
+        // [부산권]
+        register("NAEK700", "부산종합", "부산", "부산노포", "노포", "노포동", "부산고속");
+        register("NAEK703", "부산서부", "서부산", "사상", "사상터미널");
+        register("NAEK705", "해운대", "해운대터미널");
+
+        // [대전권]
+        register("NAEK300", "대전복합", "대전", "동대전", "대전터미널");
+        register("NAEK310", "유성고속", "유성", "유성터미널", "충남대");
+        register("NAEK305", "대전청사", "정부청사", "둔산");
+
+        // [광주권]
+        register("NAEK500", "광주종합", "광주", "유스퀘어", "광주고속", "광천동");
+        register("NAEK505", "광주송정", "송정");
+
+        // [인천/경기권]
+        register("NAEK100", "인천종합", "인천", "인천터미널", "관교동");
+        register("NAEK110", "수원종합", "수원", "수원터미널");
+        register("NAEK115", "서수원");
+        register("NAEK120", "성남종합", "성남", "야탑", "분당");
+
+        // [충청/전라/강원/경상권]
+        register("NAEK320", "청주고속", "청주", "가경동");
+        register("NAEK325", "북청주", "청주시외");
+        register("NAEK340", "천안고속", "천안", "천안터미널");
+        register("NAEK602", "전주고속", "전주", "전주터미널");
+        register("NAEK200", "강릉고속", "강릉", "강릉터미널");
+        register("NAEK210", "원주고속", "원주", "원주터미널");
+        register("NAEK230", "속초고속", "속초", "속초터미널");
+        register("NAEK820", "포항고속", "포항", "포항터미널");
+        register("NAEK710", "창원고속", "창원");
+        register("NAEK715", "마산고속", "마산");
+        register("NAEK560", "완도", "완도터미널");
+    }
+
+    private static void register(String id, String canonicalName, String... aliases) {
+        TERMINAL_MAP.put(canonicalName, id);
+        ID_TO_NAME_MAP.put(id, canonicalName);
+        for (String alias : aliases) {
+            TERMINAL_MAP.put(alias, id);
+        }
+    }
 
     public TagoClient(TagoProperties properties) {
         this.properties = properties;
     }
 
     /**
-     * 터미널 이름 → 터미널ID 조회
+     * 터미널 이름 → TAGO 터미널ID 조회 (1순위 완전일치 -> 2순위 포함일치 -> 3순위 API 검색)
      */
     public String findTerminalId(String terminalName) {
         if (terminalName == null || terminalName.isBlank()) return "NAEK010";
+        String clean = terminalName.trim().replaceAll("\\s+", "");
 
-        // 1. 사전 매핑 테이블에서 먼저 매칭
+        // 1. 완전 일치 매칭 (대구 -> NAEK801, 대전 -> NAEK300, 서대구 -> NAEK803)
+        if (TERMINAL_MAP.containsKey(clean)) {
+            return TERMINAL_MAP.get(clean);
+        }
+
+        // 2. 포함 일치 매칭 (동대구역 -> NAEK801, 부산노포터미널 -> NAEK700)
         for (Map.Entry<String, String> entry : TERMINAL_MAP.entrySet()) {
-            if (terminalName.contains(entry.getKey())) {
+            if (clean.contains(entry.getKey()) || entry.getKey().contains(clean)) {
                 return entry.getValue();
             }
         }
 
-        // 2. 서비스키가 없으면 기본값 반환
-        if (properties.serviceKey() == null || properties.serviceKey().isBlank()) {
-            return "NAEK010";
-        }
+        // 3. 서비스키가 있으면 실제 TAGO 터미널 목록 검색 API 호출
+        if (properties.serviceKey() != null && !properties.serviceKey().isBlank()) {
+            try {
+                String url = properties.baseUrl() + "/GetExpBusTrminlList"
+                        + "?serviceKey=" + properties.serviceKey()
+                        + "&terminalNm=" + clean
+                        + "&numOfRows=1&pageNo=1&_type=json";
 
-        try {
-            String url = properties.baseUrl() + "/GetExpBusTrminlList"
-                    + "?serviceKey=" + properties.serviceKey()
-                    + "&terminalNm=" + terminalName
-                    + "&numOfRows=1&pageNo=1&_type=json";
+                String body = restClient.get().uri(URI.create(url)).retrieve().body(String.class);
+                JsonNode item = objectMapper.readTree(body)
+                        .path("response").path("body").path("items").path("item");
 
-            String body = restClient.get().uri(URI.create(url)).retrieve().body(String.class);
-            JsonNode item = objectMapper.readTree(body)
-                    .path("response").path("body").path("items").path("item");
-
-            if (item.isArray() && !item.isEmpty()) {
-                item = item.get(0);
+                if (item.isArray() && !item.isEmpty()) {
+                    item = item.get(0);
+                }
+                String id = item.path("terminalId").asText(null);
+                if (id != null && !id.isBlank()) return id;
+            } catch (Exception e) {
+                log.warn("TAGO 터미널 API 호출 실패({}), 기본값 적용", e.getMessage());
             }
-            String id = item.path("terminalId").asText(null);
-            return (id != null) ? id : "NAEK010";
-        } catch (Exception e) {
-            log.warn("TAGO 터미널 API 호출 실패({}), 기본 매핑값 적용", e.getMessage());
-            return "NAEK010";
         }
+
+        return "NAEK010"; // 기본값 (서울경부)
     }
 
     /**
@@ -115,8 +163,8 @@ public class TagoClient {
             }
         }
 
-        // 키가 없거나 API 호출 실패 시 반환할 Mock 시간표 데이터
-        return getMockSchedules(cleanDate);
+        // 키가 없거나 API 호출 실패 시 실제 출발지/도착지에 맞춘 Mock 시간표 반환
+        return getMockSchedules(depId, arrId, cleanDate);
     }
 
     private BusSchedule toBusSchedule(JsonNode node) {
@@ -131,15 +179,26 @@ public class TagoClient {
         );
     }
 
-    /** 해커톤 시연용 Mock 버스 시간표 */
-    private List<BusSchedule> getMockSchedules(String date) {
+    /**
+     * ⭐ 사용자가 요청한 실제 출발지/도착지 명칭에 맞춘 동적 Mock 시간표 생성
+     */
+    private List<BusSchedule> getMockSchedules(String depId, String arrId, String date) {
+        String depName = ID_TO_NAME_MAP.getOrDefault(depId, "서울경부");
+        String arrName = ID_TO_NAME_MAP.getOrDefault(arrId, "대전복합");
+
         return List.of(
-                new BusSchedule("R01", "우등", "서울경부", "대전복합", date + "0700", date + "0830", 16000),
-                new BusSchedule("R02", "우등", "서울경부", "대전복합", date + "0800", date + "0930", 16000),
-                new BusSchedule("R03", "우등", "서울경부", "대전복합", date + "0900", date + "1030", 16000),
-                new BusSchedule("R04", "일반", "서울경부", "대전복합", date + "1000", date + "1130", 11000),
-                new BusSchedule("R05", "프리미엄", "서울경부", "대전복합", date + "1130", date + "1300", 20800),
-                new BusSchedule("R06", "우등", "서울경부", "대전복합", date + "1400", date + "1530", 16000)
+                new BusSchedule("R01", "우등", depName, arrName, date + "0630", date + "0800", 16000),
+                new BusSchedule("R02", "우등", depName, arrName, date + "0730", date + "0900", 16000),
+                new BusSchedule("R03", "일반", depName, arrName, date + "0830", date + "1000", 11000),
+                new BusSchedule("R04", "우등", depName, arrName, date + "0900", date + "1030", 16000),
+                new BusSchedule("R05", "프리미엄", depName, arrName, date + "1030", date + "1200", 20800),
+                new BusSchedule("R06", "우등", depName, arrName, date + "1200", date + "1330", 16000),
+                new BusSchedule("R07", "일반", depName, arrName, date + "1330", date + "1500", 11000),
+                new BusSchedule("R08", "우등", depName, arrName, date + "1500", date + "1630", 16000),
+                new BusSchedule("R09", "프리미엄", depName, arrName, date + "1630", date + "1800", 20800),
+                new BusSchedule("R10", "우등", depName, arrName, date + "1800", date + "1930", 16000),
+                new BusSchedule("R11", "우등", depName, arrName, date + "1930", date + "2100", 16000),
+                new BusSchedule("R12", "우등", depName, arrName, date + "2100", date + "2230", 16000)
         );
     }
 }
