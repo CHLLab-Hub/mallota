@@ -43,7 +43,7 @@ const AppStateContext = createContext<AppStateValue | null>(null)
 
 const initialMessage: ChatMessage = {
   role: 'app',
-  text: '어디로 가실 예정인지 큰 목소리로 말씀해 주세요.',
+  text: '어디에서 출발하시는지 큰 목소리로 말씀해 주세요.',
 }
 
 export function AppStateProvider({ children }: { children: ReactNode }) {

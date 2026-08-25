@@ -2,6 +2,7 @@ package com.malrota.service;
 
 import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
+import com.malrota.client.PythonNluClient;
 import com.malrota.client.WatsonxClient;
 import com.malrota.domain.ConversationSession;
 import com.malrota.dto.request.ConversationParseRequest;
@@ -9,6 +10,7 @@ import com.malrota.dto.response.ConversationParseResponse;
 import com.malrota.service.nlu.ConversationRuleExtractor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import com.malrota.client.PythonNluClient;
 
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
@@ -21,12 +23,14 @@ public class ConversationParseService {
 
     private final WatsonxClient watsonxClient;
     private final ConversationRuleExtractor ruleExtractor;
+    private final PythonNluClient pythonNluClient;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    public ConversationParseService(WatsonxClient watsonxClient, ConversationRuleExtractor ruleExtractor) {
+    public ConversationParseService(WatsonxClient watsonxClient, ConversationRuleExtractor ruleExtractor, PythonNluClient pythonNluClient) {
         this.watsonxClient = watsonxClient;
         this.ruleExtractor = ruleExtractor;
+        this.pythonNluClient = pythonNluClient;
     }
 
     public ConversationParseResponse parse(ConversationParseRequest request) {
@@ -34,14 +38,21 @@ public class ConversationParseService {
     }
 
     public ConversationParseResponse parse(ConversationParseRequest request, ConversationSession session) {
+        // 1. 파이썬 NLU 서버 호출 (우선)
+        ConversationParseResponse pythonResult = pythonNluClient.parse(request.text(), session);
+        if (pythonResult != null) {
+            log.info("[ConversationParseService] 파이썬 NLU 결과 사용");
+            return pythonResult;
+        }
+
+        // 2. 파이썬 실패 시 기존 방식 (룰베이스 + watsonx)
+        log.warn("[ConversationParseService] 파이썬 NLU 실패, 기존 방식으로 대체");
         LocalDateTime now = LocalDateTime.now();
         String isoDateTime = now.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "+09:00";
 
-        // 1. 룰베이스 추출기 1차 실행 (시간 정규화 & 안전망)
         ConversationRuleExtractor.RuleParse rules = ruleExtractor.extract(request.text(), now);
         ConversationParseResponse llmResult = null;
 
-        // 2. watsonx.ai LLM 호출 (최적화 프롬프트)
         if (watsonxClient != null && watsonxClient.isConfigured()) {
             try {
                 String prompt = buildPrompt(request.text(), isoDateTime, session);
@@ -52,7 +63,6 @@ public class ConversationParseService {
             }
         }
 
-        // 3. LLM + 룰베이스 + 세션 상태 병합 및 반문 생성
         return normalize(llmResult, rules, session);
     }
 
