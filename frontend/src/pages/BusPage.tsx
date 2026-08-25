@@ -1,5 +1,7 @@
+import { useState } from 'react'
 import { recommendSeat } from '../api/seatApi'
 import { useAppState } from '../features/conversation/AppState'
+import { VoicePanel, speak } from '../features/conversation/VoicePanel'
 import type { BusSchedule } from '../features/conversation/types'
 import './HomePage.css'
 
@@ -13,11 +15,17 @@ function formatTime(raw: string): string {
 }
 
 export function BusPage() {
-  const { buses, setSelectedBus, setSeat, setScreen } = useAppState()
+  const { buses, setSelectedBus, setSeat, setScreen, addMessage } = useAppState()
+  const [loading, setLoading] = useState(false)
+
+  function appSay(t: string) {
+    addMessage('app', t)
+    speak(t)
+  }
 
   async function chooseBus(bus: BusSchedule) {
     setSelectedBus(bus)
-    // 좌석 추천 받기
+    setLoading(true)
     try {
       const seatData = await recommendSeat({
         seatPreferences: [],
@@ -25,9 +33,41 @@ export function BusPage() {
         busGrade: bus.grade,
       })
       setSeat(seatData)
-      setScreen('seat')
+      appSay(`${formatTime(bus.departureTime)} 출발 버스로 선택했어요. 좌석을 골라볼게요.`)
+      setTimeout(() => setScreen('seat'), 800)
     } catch (e) {
-      alert('좌석 정보를 불러오지 못했습니다.')
+      appSay('좌석 정보를 불러오지 못했습니다.')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  // 음성으로 버스 고르기
+  function handleUserSpeak(text: string) {
+    addMessage('user', text)
+    if (buses.length === 0) return
+
+    // 가장 저렴
+    if (text.includes('저렴') || text.includes('싼') || text.includes('싸')) {
+      const cheapest = [...buses].sort((a, b) => a.charge - b.charge)[0]
+      chooseBus(cheapest)
+    }
+    // 가장 빠른/이른
+    else if (text.includes('빠른') || text.includes('이른') || text.includes('빨리') || text.includes('첫')) {
+      chooseBus(buses[0])
+    }
+    // 숫자 (첫번째, 두번째 등)
+    else if (text.includes('두') || text.includes('2')) {
+      chooseBus(buses[1] ?? buses[0])
+    }
+    else if (text.includes('세') || text.includes('3')) {
+      chooseBus(buses[2] ?? buses[0])
+    }
+    else if (text.includes('첫') || text.includes('일') || text.includes('1')) {
+      chooseBus(buses[0])
+    }
+    else {
+      appSay('첫 번째, 저렴한 것, 빠른 것 중에 말씀해 주세요.')
     }
   }
 
@@ -52,6 +92,7 @@ export function BusPage() {
               key={i}
               type="button"
               onClick={() => chooseBus(bus)}
+              disabled={loading}
               style={{
                 width: '100%',
                 textAlign: 'left',
@@ -75,6 +116,9 @@ export function BusPage() {
             </button>
           ))
         )}
+
+        {/* 음성 + 대화 */}
+        <VoicePanel onUserSpeak={handleUserSpeak} loading={loading} />
       </div>
     </div>
   )
