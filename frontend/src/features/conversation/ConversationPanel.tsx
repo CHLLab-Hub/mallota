@@ -115,7 +115,7 @@ export function ConversationPanel() {
   return (
     <div>
       <div className="chat-container">
-        {messages.map((m, i) => (
+        {messages.slice(-4).map((m, i) => (
           <div key={i} className={`chat-row ${m.role}`}>
             {m.role === 'app' && <img src={logo} alt="" className="chat-avatar" />}
             <div className={`chat-bubble ${m.role}`}>{m.text}</div>
