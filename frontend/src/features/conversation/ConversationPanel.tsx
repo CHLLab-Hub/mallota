@@ -6,6 +6,8 @@ import { ApiError } from '../../api/httpClient'
 import { useVoiceRecorder } from './useVoiceRecorder'
 import { SeatMap } from './SeatMap'
 import { BusTicket } from './BusTicket'
+import logo from '../../assets/logo.png'
+import './ConversationPanel.css'
 import type {
   ConversationSessionResult,
   BusSchedule,
@@ -28,10 +30,8 @@ function formatTime(raw: string): string {
   return minute === '00' ? `${period} ${displayHour}시` : `${period} ${displayHour}시 ${minute}분`
 }
 
-// 시간대 선호에 맞는 버스 선택
 function pickBusByTime(buses: BusSchedule[], timePref: string | null): BusSchedule {
   if (!timePref || timePref === 'ANY') return buses[0]
-
   const filtered = buses.filter((bus) => {
     const hour = parseInt(bus.departureTime.substring(8, 10), 10)
     if (timePref === 'MORNING') return hour >= 5 && hour < 12
@@ -39,16 +39,19 @@ function pickBusByTime(buses: BusSchedule[], timePref: string | null): BusSchedu
     if (timePref === 'EVENING') return hour >= 18 || hour < 5
     return true
   })
-
   return filtered.length > 0 ? filtered[0] : buses[0]
 }
 
 type Stage = 'chat' | 'payment' | 'ticket'
+type ChatMessage = { role: 'app' | 'user'; text: string }
 
 export function ConversationPanel() {
   const [text, setText] = useState('')
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [message, setMessage] = useState('어디로 가실 예정인지 말씀해 주세요.')
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    { role: 'app', text: '어디로 가실 예정인지 큰 목소리로 말씀해 주세요.' },
+  ])
+  const [showInput, setShowInput] = useState(false)
   const [loading, setLoading] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -60,8 +63,12 @@ export function ConversationPanel() {
 
   const { recording, startRecording, stopRecording } = useVoiceRecorder()
 
-  // 최종 확정된 좌석 (직접 선택했으면 그것, 아니면 추천)
   const finalSeatNo = selectedSeat ?? seat?.bestSeat?.seatNo ?? ''
+
+  // 대화에 메시지 추가
+  function addMessage(role: 'app' | 'user', text: string) {
+    setMessages((prev) => [...prev, { role, text }])
+  }
 
   async function speak(text: string) {
     if (!text.trim()) return
@@ -76,6 +83,12 @@ export function ConversationPanel() {
     }
   }
 
+  // 앱이 말하기 (말풍선 + 음성)
+  function appSay(text: string) {
+    addMessage('app', text)
+    speak(text)
+  }
+
   async function handleMicClick() {
     if (recording) {
       setTranscribing(true)
@@ -83,7 +96,9 @@ export function ConversationPanel() {
       try {
         const audio = await stopRecording()
         const data = await speechToText(audio)
-        setText(data.transcript)
+        if (data.transcript) {
+          await handleSend(data.transcript)
+        }
       } catch (e) {
         setError('음성 인식에 실패했습니다. 다시 시도해 주세요.')
       } finally {
@@ -99,25 +114,26 @@ export function ConversationPanel() {
     }
   }
 
-  async function handleSend() {
-    if (!text.trim()) return
+  async function handleSend(inputText?: string) {
+    const sendText = (inputText ?? text).trim()
+    if (!sendText) return
+
+    addMessage('user', sendText) // 사용자 말풍선
+    setText('')
     setLoading(true)
     setSelectedSeat(null)
     setSelecting(false)
     setError(null)
+
     try {
-      const session: ConversationSessionResult = await parseConversation(text, sessionId)
+      const session: ConversationSessionResult = await parseConversation(sendText, sessionId)
       setSessionId(session.sessionId)
-      setText('')
 
       if (session.state === 'COLLECTING_CONDITIONS') {
-        const question = buildQuestion(session)
-        setMessage(question)
-        speak(question)
+        appSay(buildQuestion(session))
         setBus(null)
         setSeat(null)
       } else {
-        setMessage('조건이 모두 확인되었습니다. 버스를 찾고 있어요...')
         const buses = await searchBuses({
           departure: session.departure!,
           arrival: session.arrival!,
@@ -125,9 +141,7 @@ export function ConversationPanel() {
         })
 
         if (buses.length === 0) {
-          const msg = '해당 조건의 버스를 찾지 못했습니다.'
-          setMessage(msg)
-          speak(msg)
+          appSay('해당 조건의 버스를 찾지 못했습니다.')
           setBus(null)
           setSeat(null)
         } else {
@@ -141,9 +155,9 @@ export function ConversationPanel() {
           })
           setSeat(seatData)
 
-          const msg = `${formatTime(chosenBus.departureTime)} 출발 ${chosenBus.grade} 버스를 추천합니다. 추천 좌석은 ${seatData.bestSeat?.seatNo ?? ''}번입니다.`
-          setMessage(msg)
-          speak(msg)
+          appSay(
+            `${formatTime(chosenBus.departureTime)} 출발 ${chosenBus.grade} 버스를 추천합니다. 추천 좌석은 ${seatData.bestSeat?.seatNo ?? ''}번입니다.`,
+          )
         }
       }
     } catch (error) {
@@ -157,7 +171,6 @@ export function ConversationPanel() {
     }
   }
 
-  // 처음으로 돌아가기 (초기화)
   function reset() {
     setStage('chat')
     setBus(null)
@@ -165,7 +178,7 @@ export function ConversationPanel() {
     setSelectedSeat(null)
     setSelecting(false)
     setSessionId(null)
-    setMessage('어디로 가실 예정인지 말씀해 주세요.')
+    setMessages([{ role: 'app', text: '어디로 가실 예정인지 큰 목소리로 말씀해 주세요.' }])
   }
 
   // 티켓 화면
@@ -176,7 +189,7 @@ export function ConversationPanel() {
   // 결제 화면
   if (stage === 'payment' && bus) {
     return (
-      <div className="conversation-panel">
+      <div>
         <h3>결제 확인</h3>
         <div style={{ marginTop: '16px', fontSize: '1.1rem', lineHeight: 1.8 }}>
           <div>{bus.departure} → {bus.arrival}</div>
@@ -184,13 +197,9 @@ export function ConversationPanel() {
           <div>좌석: <b>{finalSeatNo}</b></div>
           <div>결제 금액: <b>{bus.charge.toLocaleString()}원</b></div>
         </div>
-        <div className="panel-actions" style={{ marginTop: '20px' }}>
-          <button className="primary-button" type="button" onClick={() => setStage('chat')}>
-            뒤로
-          </button>
-          <button className="primary-button" type="button" onClick={() => setStage('ticket')}>
-            결제 확인
-          </button>
+        <div style={{ display: 'flex', gap: '10px', marginTop: '20px' }}>
+          <button className="send-button" type="button" onClick={() => setStage('chat')}>뒤로</button>
+          <button className="send-button" type="button" onClick={() => setStage('ticket')}>결제 확인</button>
         </div>
       </div>
     )
@@ -198,73 +207,38 @@ export function ConversationPanel() {
 
   // 대화 화면 (기본)
   return (
-    <div className="conversation-panel">
-      <p style={{ fontSize: '1.2rem', fontWeight: 'bold' }}>{message}</p>
-
-      <label htmlFor="travel-request">말씀하시거나 입력해 주세요</label>
-      <textarea
-        id="travel-request"
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-      />
-
-      <div className="panel-actions">
-        <button
-          className="primary-button"
-          type="button"
-          onClick={handleMicClick}
-          disabled={transcribing || loading}
-        >
-          {recording ? '🔴 녹음 중지' : transcribing ? '인식 중...' : '🎤 말하기'}
-        </button>
-        <button
-          className="primary-button"
-          type="button"
-          onClick={handleSend}
-          disabled={loading || recording || !text.trim()}
-        >
-          {loading ? '처리 중...' : '보내기'}
-        </button>
+    <div>
+      {/* 대화 말풍선 */}
+      <div className="chat-container">
+        {messages.map((m, i) => (
+          <div key={i} className={`chat-row ${m.role}`}>
+            {m.role === 'app' && <img src={logo} alt="" className="chat-avatar" />}
+            <div className={`chat-bubble ${m.role}`}>{m.text}</div>
+          </div>
+        ))}
       </div>
 
       {error && <p style={{ color: 'red' }}>{error}</p>}
 
+      {/* 버스 정보 */}
       {bus && (
-        <div style={{ marginTop: '20px' }}>
+        <div style={{ marginTop: '16px' }}>
           <h3>추천 버스</h3>
-          <p>
-            {formatTime(bus.departureTime)} 출발 · {bus.grade} · {bus.charge.toLocaleString()}원
-            {' '}({bus.departure} → {bus.arrival})
-          </p>
+          <p>{formatTime(bus.departureTime)} 출발 · {bus.grade} · {bus.charge.toLocaleString()}원 ({bus.departure} → {bus.arrival})</p>
         </div>
       )}
 
+      {/* 좌석 */}
       {seat && seat.bestSeat && (
-        <div style={{ marginTop: '20px' }}>
+        <div style={{ marginTop: '16px' }}>
           <h3>추천 좌석: {finalSeatNo}</h3>
           <ul>
-            {seat.reasons.map((reason, i) => (
-              <li key={i}>{reason}</li>
-            ))}
+            {seat.reasons.map((reason, i) => (<li key={i}>{reason}</li>))}
           </ul>
-
           {!selecting && (
-            <button
-              type="button"
-              className="primary-button"
-              onClick={() => setSelecting(true)}
-              style={{ marginTop: '8px' }}
-            >
-              다른 좌석 선택하기
-            </button>
+            <button type="button" className="send-button" onClick={() => setSelecting(true)}>다른 좌석 선택하기</button>
           )}
-
-          {selecting && (
-            <p style={{ color: '#2563eb', marginTop: '8px' }}>
-              앉고 싶은 좌석을 눌러주세요.
-            </p>
-          )}
-
+          {selecting && <p style={{ color: '#f57f20' }}>앉고 싶은 좌석을 눌러주세요.</p>}
           <SeatMap
             seats={seat.allSeats}
             recommendedNo={seat.bestSeat.seatNo}
@@ -272,17 +246,46 @@ export function ConversationPanel() {
             selectedNo={selectedSeat ?? undefined}
             onSelect={selecting ? (s) => setSelectedSeat(s.seatNo) : undefined}
           />
-
-          <button
-            type="button"
-            className="primary-button"
-            onClick={() => setStage('payment')}
-            style={{ marginTop: '16px', fontSize: '1.1rem' }}
-          >
-            결제하기
-          </button>
+          <button type="button" className="send-button" onClick={() => setStage('payment')}>결제하기</button>
         </div>
       )}
+
+      {/* 마이크 영역 */}
+      <div className="mic-area">
+        <button
+          type="button"
+          className={`mic-button ${recording ? 'recording' : ''}`}
+          onClick={handleMicClick}
+          disabled={transcribing || loading}
+        >
+          {recording ? '⏹' : '🎤'}
+        </button>
+        <div className="mic-label">
+          {recording ? '녹음 중... (누르면 완료)' : transcribing ? '인식 중...' : loading ? '처리 중...' : '눌러서 말하기'}
+        </div>
+        <button type="button" className="mic-sublabel" onClick={() => setShowInput((v) => !v)}>
+          직접 글씨로 입력하기
+        </button>
+
+        {showInput && (
+          <div style={{ width: '100%' }}>
+            <textarea
+              className="chat-input"
+              value={text}
+              onChange={(e) => setText(e.target.value)}
+              placeholder="여기에 입력하세요"
+            />
+            <button
+              type="button"
+              className="send-button"
+              onClick={() => handleSend()}
+              disabled={loading || !text.trim()}
+            >
+              보내기
+            </button>
+          </div>
+        )}
+      </div>
     </div>
   )
 }

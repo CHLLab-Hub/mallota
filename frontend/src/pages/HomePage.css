@@ -1,0 +1,89 @@
+/* 폰 크기 화면 */
+.phone-frame {
+  width: min(100%, 430px);
+  min-height: 100vh;
+  margin: 0 auto;
+  display: flex;
+  flex-direction: column;
+  background: #fffdf9;
+  position: relative;
+}
+
+/* 상단 헤더 */
+.home-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 16px 20px 8px;
+}
+
+.home-brand {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.home-brand img {
+  height: 40px;
+}
+
+.info-button {
+  border: 1px solid #f0a868;
+  border-radius: 999px;
+  padding: 8px 16px;
+  background: #fff;
+  color: #e07b28;
+  font-size: 0.95rem;
+  font-weight: 700;
+}
+
+/* 제목 */
+.home-title {
+  padding: 12px 20px 20px;
+  font-size: 1.7rem;
+  font-weight: 800;
+  line-height: 1.35;
+  color: #2b2320;
+}
+
+.home-title .accent {
+  color: #f07f21;
+}
+
+/* 가운데 내용 영역 (대화 등) */
+.home-body {
+  flex: 1;
+  padding: 0 20px 20px;
+  overflow-y: auto;
+}
+
+/* 하단 탭 */
+.bottom-tab {
+  display: flex;
+  justify-content: space-around;
+  align-items: center;
+  padding: 12px 0 20px;
+  border-top: 1px solid #f0e6d8;
+  background: #fffdf9;
+}
+
+.tab-item {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 4px;
+  background: none;
+  border: none;
+  color: #b0a89e;
+  font-size: 0.8rem;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.tab-item.active {
+  color: #f07f21;
+}
+
+.tab-icon {
+  font-size: 1.4rem;
+}
