@@ -1,6 +1,7 @@
 import logo from '../assets/logo.png'
 import { ConversationPanel } from '../features/conversation/ConversationPanel'
 import './HomePage.css'
+import { BottomTab } from './BottomTab'
 
 export function HomePage() {
   return (
@@ -24,20 +25,7 @@ export function HomePage() {
       </div>
 
       {/* 하단 탭 */}
-      <nav className="bottom-tab">
-        <button type="button" className="tab-item">
-          <span className="tab-icon">📋</span>
-          예매내역
-        </button>
-        <button type="button" className="tab-item active">
-          <span className="tab-icon">🏠</span>
-          홈
-        </button>
-        <button type="button" className="tab-item">
-          <span className="tab-icon">👤</span>
-          마이페이지
-        </button>
-      </nav>
+      <BottomTab />
     </div>
   )
 }
