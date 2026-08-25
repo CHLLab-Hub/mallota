@@ -1,4 +1,6 @@
+import { useEffect, useRef } from 'react'
 import { useAppState } from '../features/conversation/AppState'
+import { VoicePanel, speak } from '../features/conversation/VoicePanel'
 import './HomePage.css'
 
 function formatTime(raw: string): string {
@@ -18,9 +20,52 @@ function formatDate(raw: string): string {
 export function ConfirmPage() {
   const {
     selectedBus, seat, selectedSeatNo,
-    setScreen, addBooking, resetMessages,
+    setScreen, addMessage, addBooking, resetMessages,
     setSelectedBus, setSeat, setSelectedSeatNo, setSessionId,
   } = useAppState()
+
+  const announced = useRef(false)
+
+  function appSay(t: string) {
+    addMessage('app', t)
+    speak(t)
+  }
+
+  const seatNo = selectedSeatNo ?? seat?.bestSeat?.seatNo ?? ''
+
+  // 화면 뜰 때 승차권 안내
+  useEffect(() => {
+    if (selectedBus && !announced.current) {
+      announced.current = true
+      appSay(`${selectedBus.departure}에서 ${selectedBus.arrival}로 가는 ${formatTime(selectedBus.departureTime)} 출발 버스가 준비되었습니다. 좌석은 ${seatNo}번입니다. 결제할까요?`)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
+
+  function pay() {
+    if (!selectedBus) return
+    addBooking({ bus: selectedBus, seatNo, id: Date.now().toString() })
+    appSay('결제가 완료되었습니다. 안전한 여행 되세요.')
+    setTimeout(() => {
+      setSelectedBus(null)
+      setSeat(null)
+      setSelectedSeatNo(null)
+      setSessionId(null)
+      resetMessages()
+      setScreen('home')
+    }, 2000)
+  }
+
+  function handleUserSpeak(text: string) {
+    addMessage('user', text)
+    if (text.includes('결제') || text.includes('네') || text.includes('할게') || text.includes('좋아') || text.includes('그래') || text.includes('예')) {
+      pay()
+    } else if (text.includes('취소') || text.includes('아니') || text.includes('뒤로')) {
+      setScreen('seat')
+    } else {
+      appSay('결제하시려면 결제할게요, 취소하시려면 취소라고 말씀해 주세요.')
+    }
+  }
 
   if (!selectedBus) {
     return (
@@ -31,25 +76,6 @@ export function ConfirmPage() {
     )
   }
 
-  const seatNo = selectedSeatNo ?? seat?.bestSeat?.seatNo ?? ''
-
-  function pay() {
-    // 예매 내역에 추가
-    addBooking({
-      bus: selectedBus!,
-      seatNo,
-      id: Date.now().toString(),
-    })
-    alert('결제가 완료되었습니다!')
-    // 초기화하고 홈으로
-    setSelectedBus(null)
-    setSeat(null)
-    setSelectedSeatNo(null)
-    setSessionId(null)
-    resetMessages()
-    setScreen('home')
-  }
-
   return (
     <div className="phone-frame">
       <header className="home-header">
@@ -58,12 +84,9 @@ export function ConfirmPage() {
         </button>
       </header>
 
-      <h1 className="home-title" style={{ fontSize: '1.4rem' }}>
-        예약 확인
-      </h1>
+      <h1 className="home-title" style={{ fontSize: '1.4rem' }}>예약 확인</h1>
 
       <div className="home-body">
-        {/* 승차권 */}
         <div style={{
           border: '2px dashed #f07f21',
           borderRadius: '16px',
@@ -101,6 +124,8 @@ export function ConfirmPage() {
         <button type="button" className="send-button" onClick={pay} style={{ marginTop: '20px' }}>
           결제하기
         </button>
+
+        <VoicePanel onUserSpeak={handleUserSpeak} />
       </div>
     </div>
   )
