@@ -37,21 +37,25 @@ public class BusSearchService {
     private Comparator<BusSchedule> scheduleComparator(BusSearchRequest request) {
         Comparator<BusSchedule> byDepartureTime = Comparator.comparing(this::departureTime);
 
+        // 1. 특정 시각(예: 14:00)을 지정한 경우 -> 해당 시각과 가장 가까운 순서
         if (hasText(request.departureTime())) {
             LocalTime requested = parseTime(request.departureTime());
             if (requested != null) {
-                // 정확한 시각이 없으면 요청 시각과 가장 가까운 운행편을 먼저 보여준다.
                 return Comparator.comparingInt((BusSchedule schedule) -> Math.abs(minutesBetween(departureTime(schedule), requested)))
                         .thenComparing(byDepartureTime);
             }
         }
 
-        return switch (request.servicePreference() == null ? "" : request.servicePreference()) {
-            case "LAST" -> byDepartureTime.reversed();
-            case "FIRST" -> byDepartureTime;
-            default -> Comparator.comparingInt((BusSchedule schedule) -> timePreferenceRank(departureTime(schedule), request.timePreference()))
-                    .thenComparing(byDepartureTime);
-        };
+        // 2. 1순위: 사용자가 지정한 시간대(MORNING: 06시~12시)에 해당하는 버스를 최우선(rank 0) 배치
+        Comparator<BusSchedule> byTimePreference = Comparator.comparingInt(
+                (BusSchedule schedule) -> timePreferenceRank(departureTime(schedule), request.timePreference())
+        );
+
+        // 3. 2순위: 그 시간대(오전) 안에서 첫차(오름차순) / 막차(내림차순) 정렬
+        boolean isLast = "LAST".equalsIgnoreCase(request.servicePreference());
+        Comparator<BusSchedule> secondarySort = isLast ? byDepartureTime.reversed() : byDepartureTime;
+
+        return byTimePreference.thenComparing(secondarySort);
     }
 
     private boolean matchesGrade(BusSchedule schedule, String preference) {
@@ -66,15 +70,22 @@ public class BusSearchService {
     }
 
     private int timePreferenceRank(LocalTime departure, String preference) {
-        if (!hasText(preference) || "ANY".equals(preference)) return 0;
-        boolean matches = switch (preference) {
+        if (!hasText(preference) || "ANY".equalsIgnoreCase(preference)) return 0;
+        
+        // 시간대 정의:
+        // - MORNING   : 06:00 ~ 12:00 (새벽 1시 같은 심야는 제외!)
+        // - AFTERNOON : 12:00 ~ 17:00
+        // - EVENING   : 17:00 ~ 21:00
+        // - NIGHT     : 21:00 ~ 24:00 또는 00:00 ~ 06:00 (심야)
+        boolean matches = switch (preference.toUpperCase()) {
             case "MORNING" -> !departure.isBefore(LocalTime.of(6, 0)) && departure.isBefore(LocalTime.NOON);
             case "AFTERNOON" -> !departure.isBefore(LocalTime.NOON) && departure.isBefore(LocalTime.of(17, 0));
-            case "EVENING" -> !departure.isBefore(LocalTime.of(17, 0)) && departure.isBefore(LocalTime.of(20, 0));
-            case "NIGHT" -> !departure.isBefore(LocalTime.of(20, 0));
+            case "EVENING" -> !departure.isBefore(LocalTime.of(17, 0)) && departure.isBefore(LocalTime.of(21, 0));
+            case "NIGHT" -> departure.isBefore(LocalTime.of(6, 0)) || !departure.isBefore(LocalTime.of(21, 0));
             default -> true;
         };
-        return matches ? 0 : 1;
+        
+        return matches ? 0 : 1; // 0이 우선순위 높음 (해당 시간대 버스가 맨 위에 옴)
     }
 
     private LocalTime departureTime(BusSchedule schedule) {

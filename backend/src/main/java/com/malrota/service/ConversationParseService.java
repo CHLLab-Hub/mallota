@@ -7,17 +7,15 @@ import com.malrota.domain.ConversationSession;
 import com.malrota.dto.request.ConversationParseRequest;
 import com.malrota.dto.response.ConversationParseResponse;
 import com.malrota.service.nlu.ConversationRuleExtractor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
-import java.time.LocalDate;
 import java.time.LocalDateTime;
-import java.util.ArrayList;
-import java.util.LinkedHashSet;
-import java.util.List;
-import java.util.Set;
+import java.time.format.DateTimeFormatter;
+import java.util.*;
 import java.util.stream.Collectors;
 
-/** watsonx는 추출 보조 역할만 하고, 필수값 판정과 상대 날짜 보정은 서버가 수행한다. */
+@Slf4j
 @Service
 public class ConversationParseService {
 
@@ -31,25 +29,30 @@ public class ConversationParseService {
         this.ruleExtractor = ruleExtractor;
     }
 
-    /** 세션을 사용하지 않는 기존 /search 호환용 진입점. */
     public ConversationParseResponse parse(ConversationParseRequest request) {
         return parse(request, null);
     }
 
-    /** 현재 서버 세션을 포함해 한 턴의 조건을 추출하고 완성 상태를 반환한다. */
     public ConversationParseResponse parse(ConversationParseRequest request, ConversationSession session) {
         LocalDateTime now = LocalDateTime.now();
+        String isoDateTime = now.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "+09:00";
+
+        // 1. 룰베이스 추출기 1차 실행 (시간 정규화 & 안전망)
         ConversationRuleExtractor.RuleParse rules = ruleExtractor.extract(request.text(), now);
         ConversationParseResponse llmResult = null;
 
-        if (watsonxClient.isConfigured()) {
+        // 2. watsonx.ai LLM 호출 (최적화 프롬프트)
+        if (watsonxClient != null && watsonxClient.isConfigured()) {
             try {
-                String rawAnswer = watsonxClient.ask(buildPrompt(request.text(), now.toLocalDate(), session));
+                String prompt = buildPrompt(request.text(), isoDateTime, session);
+                String rawAnswer = watsonxClient.generate(prompt);
                 llmResult = objectMapper.readValue(extractJson(rawAnswer), ConversationParseResponse.class);
-            } catch (Exception ignored) {
-                // 키·네트워크·LLM JSON 오류가 있어도 기본 대화 흐름은 계속 동작한다.
+            } catch (Exception e) {
+                log.warn("[ConversationParseService] LLM 호출 실패, 룰베이스 결과로 대체: {}", e.getMessage());
             }
         }
+
+        // 3. LLM + 룰베이스 + 세션 상태 병합 및 반문 생성
         return normalize(llmResult, rules, session);
     }
 
@@ -64,25 +67,27 @@ public class ConversationParseService {
         String timePreference = firstNonBlank(rules.timePreference(), value(llm, ConversationParseResponse::timePreference), sessionValue(session, ConversationSession::getTimePreference), "ANY");
         String servicePreference = firstNonBlank(rules.servicePreference(), value(llm, ConversationParseResponse::servicePreference), sessionValue(session, ConversationSession::getServicePreference), "ANY");
         String busGradePreference = firstNonBlank(rules.busGradePreference(), value(llm, ConversationParseResponse::busGradePreference), sessionValue(session, ConversationSession::getBusGradePreference), "ANY");
-        int passengers = rules.passengers() > 0 ? rules.passengers()
-                : llm != null && llm.passengers() > 0 ? llm.passengers()
-                : session != null && session.getPassengers() > 0 ? session.getPassengers() : 1;
+        
+        int passengers = rules.passengers() > 1 ? rules.passengers()
+                : llm != null && llm.passengers() > 1 ? llm.passengers()
+                : session != null && session.getPassengers() > 1 ? session.getPassengers() : 1;
 
         List<String> seatPreferences = mergePreferences(session == null ? List.of() : session.getSeatPreferences(),
                 llm == null ? null : llm.seatPreferences(), rules.seatPreferences(), rules.seatPreferenceMentioned());
         List<String> accessibilityNeeds = mergePreferences(session == null ? List.of() : session.getAccessibilityNeeds(),
-                llm == null ? null : llm.accessibilityNeeds(), rules.accessibilityMentioned() ? rules.accessibilityNeeds() : List.of(),
-                rules.accessibilityMentioned());
+                llm == null ? null : llm.accessibilityNeeds(), rules.accessibilityNeeds(), rules.accessibilityMentioned());
 
-        List<String> missing = missingRequired(departure, arrival, date);
-        return new ConversationParseResponse(intent, nullIfBlank(departure), nullIfBlank(arrival), nullIfBlank(date),
+        List<String> missing = missingRequired(departure, arrival, date, departureTime, timePreference);
+        String prompt = clarificationPrompt(missing, departure, arrival);
+
+        return new ConversationParseResponse(
+                intent, nullIfBlank(departure), nullIfBlank(arrival), nullIfBlank(date),
                 nullIfBlank(departureTime), timePreference, servicePreference, busGradePreference, passengers,
-                seatPreferences, accessibilityNeeds, missing, clarificationPrompt(missing, departure, arrival));
+                seatPreferences, accessibilityNeeds, missing, prompt
+        );
     }
 
-    /** 빈 배열을 반환한 LLM 때문에 기존 세션 선호가 사라지지 않도록 병합한다. */
-    private List<String> mergePreferences(List<String> existing, List<String> llmValues,
-                                          List<String> ruleValues, boolean explicitlyMentioned) {
+    private List<String> mergePreferences(List<String> existing, List<String> llmValues, List<String> ruleValues, boolean explicitlyMentioned) {
         Set<String> result = new LinkedHashSet<>();
         if (!explicitlyMentioned) {
             addAll(result, existing);
@@ -95,43 +100,112 @@ public class ConversationParseService {
     }
 
     private void addAll(Set<String> target, List<String> values) {
-        if (values != null) values.stream().filter(value -> value != null && !value.isBlank()).forEach(target::add);
+        if (values != null) values.stream().filter(v -> v != null && !v.isBlank() && !"null".equalsIgnoreCase(v)).forEach(target::add);
     }
 
-    private List<String> missingRequired(String departure, String arrival, String date) {
+    private List<String> missingRequired(String departure, String arrival, String date, String depTime, String timePref) {
         List<String> missing = new ArrayList<>();
         if (isBlank(departure)) missing.add("departure");
         if (isBlank(arrival)) missing.add("arrival");
         if (isBlank(date)) missing.add("date");
+        if (isBlank(depTime) && (isBlank(timePref) || "ANY".equalsIgnoreCase(timePref))) {
+            missing.add("timePreference");
+        }
         return missing;
     }
 
     private String clarificationPrompt(List<String> missing, String departure, String arrival) {
         if (missing.isEmpty()) return null;
-        if (missing.contains("departure") && missing.contains("arrival")) return "어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.";
-        if (missing.contains("departure")) return "%s행 버스를 찾을 출발지를 말씀해 주세요.".formatted(arrival);
-        if (missing.contains("arrival")) return "%s에서 어디로 가시나요?".formatted(departure);
-        return "언제 출발하시나요? 오늘, 내일, 이번 주 토요일처럼 말씀해 주세요.";
+        if (missing.contains("departure") && missing.contains("arrival")) {
+            return "어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.";
+        }
+        if (missing.contains("departure")) {
+            return (arrival != null ? arrival + "행" : "버스") + "를 찾을 출발지를 말씀해 주세요.";
+        }
+        if (missing.contains("arrival")) {
+            return (departure != null ? departure + "에서" : "") + " 어디로 가시나요?";
+        }
+        if (missing.contains("date") && missing.contains("timePreference")) {
+            return "언제 출발하시나요? '내일 아침', '이번 주말 오후'처럼 편하게 말씀해 주세요.";
+        }
+        if (missing.contains("date")) {
+            return "언제 출발하시나요? 오늘, 내일, 이번 주 토요일처럼 말씀해 주세요.";
+        }
+        if (missing.contains("timePreference")) {
+            return "몇 시쯤 출발하는 버스를 원하시나요? '오전 9시', '오후 2시', '첫차', '막차'처럼 말씀해 주세요.";
+        }
+        return "출발 정보를 말씀해 주시면 바로 찾아드릴게요.";
     }
 
-    private String buildPrompt(String text, LocalDate today, ConversationSession session) {
-        String currentState = session == null ? "{}" : """
+    private String buildPrompt(String text, String isoDateTime, ConversationSession session) {
+        String currentStateJson = session == null ? "{}" : """
                 {"departure":"%s","arrival":"%s","date":"%s","departureTime":"%s","timePreference":"%s","servicePreference":"%s","busGradePreference":"%s","passengers":%d,"seatPreferences":%s,"accessibilityNeeds":%s}
                 """.formatted(jsonValue(session.getDeparture()), jsonValue(session.getArrival()), jsonValue(session.getDate()),
                 jsonValue(session.getDepartureTime()), jsonValue(session.getTimePreference()), jsonValue(session.getServicePreference()),
                 jsonValue(session.getBusGradePreference()), session.getPassengers(), jsonArray(session.getSeatPreferences()), jsonArray(session.getAccessibilityNeeds()));
+
         return """
-                당신은 고속버스 예매 서비스의 자연어 조건 추출기다. 사용자 발화에서 말한 정보만 JSON 하나로 반환하라.
-                설명, Markdown, 터미널 ID, 운행편, 요금, 좌석 재고, 예약 결과는 절대 출력하지 마라.
-                오늘 날짜는 %s이며 내일·모레·요일 같은 상대 날짜는 YYYY-MM-DD로 변환한다.
-                기존 수집 상태: %s
-                반환 키: intent(BUS_SEARCH/CANCEL/INQUIRY), departure, arrival, date, departureTime(HH:MM 또는 null),
-                timePreference(MORNING/AFTERNOON/EVENING/NIGHT/ANY), servicePreference(FIRST/LAST/ANY),
-                busGradePreference(GENERAL/EXCELLENT/PREMIUM/ANY), passengers, seatPreferences, accessibilityNeeds.
-                출발지·도착지·날짜가 모두 있을 때에만 서버가 버스 API를 호출한다. 없는 값은 추측하지 말고 null로 둔다.
-                "창가 말고 통로"처럼 수정한 선호는 새 값으로 교체하고, 현재 발화에 없는 기존 조건은 유지한다.
-                사용자 발화: %s
-                """.formatted(today, currentState, text);
+            당신은 고령자(디지털 소외계층) 및 교통약자를 위한 고속버스 예매 서비스의 자연어 조건 추출(NLU) 인공지능입니다.
+            공손하고 차분한 어투로 차근차근 설명해줘야 하고, 사용자 음성에서 추출한 조건을 절대 넘겨 짚지 않아야 합니다.
+            사용자 발화와 기존 수집 정보를 해석하여, 아래에 정의된 JSON 객체만 반환하세요.
+            설명, Markdown(백틱), 추가 문장, 질문을 절대 출력하지 마세요.
+
+            [입력 정보]
+            - 기준 시각: %s (Asia/Seoul)
+            - 기존 수집 정보: %s
+
+            [핵심 추출 규칙]
+            1. 지명/터미널: '~행'(부산행 등)은 arrival, '~발'(서울발 등)은 departure에 지명만 저장
+            2. 날짜/시간: 기준시각 참고하여 절대날짜(YYYY-MM-DD) 변환. "첫차/시방/빨리"->servicePreference:"FIRST", "막차"->"LAST"
+            3. 탑승 인원: 가족/동행(할머니, 손주, 영감, 바깥양반 등)과 '함께/둘이/데리고' 타면 -> passengers: 2 & accessibilityNeeds에 "ELDERLY_CARE" 추가
+            4. 신체/좌석 배려:
+               - 다리/무릎 통증, 도가니, 시큰거림, 삭신, 계단 힘듦 -> accessibilityNeeds에 "WALKING_DIFFICULTY" & seatPreferences에 "FRONT"
+               - 멀미, 속 울렁거림, 메스꺼움 -> accessibilityNeeds에 "MOTION_SICKNESS" & seatPreferences에 "MIDDLE"
+            5. 등급 선호: "우등"->EXCELLENT, "프리미엄/편한 거"->PREMIUM, "일반/싼 거/싼 놈"->GENERAL, "아무거나"->ANY
+            6. 상태 병합: 새로 언급된 조건은 갱신하고, 언급되지 않은 기존 조건은 유지
+
+            [반환 JSON 스키마]
+            {
+              "intent": "BUS_SEARCH | CANCEL | INQUIRY",
+              "departure": "string | null",
+              "arrival": "string | null",
+              "date": "YYYY-MM-DD | null",
+              "departureTime": "HH:MM | null",
+              "timePreference": "MORNING | AFTERNOON | EVENING | NIGHT | ANY",
+              "servicePreference": "FIRST | LAST | ANY",
+              "busGradePreference": "GENERAL | EXCELLENT | PREMIUM | ANY",
+              "passengers": 1,
+              "seatPreferences": [],
+              "accessibilityNeeds": []
+            }
+
+            [예시 1 - 표준 발화 및 보행 배려]
+            기준 시각: 2026-08-24T10:00:00+09:00
+            기존 수집 정보: {}
+            사용자: "내일 오전 서울에서 대전 가는데 우등으로, 다리가 불편해서 앞쪽 창가로 줘"
+            결과:
+            {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"EXCELLENT","passengers":1,"seatPreferences":["FRONT","WINDOW"],"accessibilityNeeds":["WALKING_DIFFICULTY"]}
+
+            [예시 2 - 사투리 발화 및 손주 동행]
+            기준 시각: 2026-08-24T10:00:00+09:00
+            기존 수집 정보: {}
+            사용자: "손주 아 데꼬 부산행 젤 빠른 거 둘이 탈 건데 계단 타기 하영 힘들어"
+            결과:
+            {"intent":"BUS_SEARCH","departure":null,"arrival":"부산","date":null,"departureTime":null,"timePreference":"ANY","servicePreference":"FIRST","busGradePreference":"ANY","passengers":2,"seatPreferences":["FRONT"],"accessibilityNeeds":["WALKING_DIFFICULTY","ELDERLY_CARE"]}
+
+            [예시 3 - 멀티턴 상태 수정]
+            기준 시각: 2026-08-24T10:00:00+09:00
+            기존 수집 정보: {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"EXCELLENT","passengers":1,"seatPreferences":["FRONT"],"accessibilityNeeds":["WALKING_DIFFICULTY"]}
+            사용자: "우등 말고 젤 싼 일반으로 바꿔줘"
+            결과:
+            {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"GENERAL","passengers":1,"seatPreferences":["FRONT"],"accessibilityNeeds":["WALKING_DIFFICULTY"]}
+
+            [실제 입력]
+            기준 시각: %s
+            기존 수집 정보: %s
+            사용자: "%s"
+            결과:
+            """.formatted(isoDateTime, currentStateJson, isoDateTime, currentStateJson, text);
     }
 
     private String extractJson(String raw) {

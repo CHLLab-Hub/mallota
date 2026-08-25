@@ -7,54 +7,61 @@ import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
 import java.time.YearMonth;
-import java.util.ArrayList;
-import java.util.List;
-import java.util.Locale;
+import java.util.*;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
 /**
- * watsonx 호출이 불가능하거나 상대 날짜를 보정해야 할 때 사용하는 결정적 NLU 규칙이다.
- * 이 클래스는 운행편·요금·터미널 ID를 추측하지 않고, 사용자가 말한 조건만 다룬다.
+ * watsonx 호출이 불가능하거나 상대 날짜/시간을 보정해야 할 때 사용하는 결정론적 NLU 규칙 엔진.
  */
 @Component
 public class ConversationRuleExtractor {
 
-    private static final String TERMINALS = "동서울|서울|대전|부산|광주|대구|강릉|속초|전주|원주|천안|완도";
-    private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:에서|서|발)");
-    private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|행)");
+    private static final String TERMINALS = "동서울|서울경부|서울|대전복합|대전|부산|광주|대구|강릉|속초|전주|원주|천안|완도";
+    private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(?:출발(?:지)?[:\\s]*)?(" + TERMINALS + ")\\s*(?:에서|서|발)");
+    private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))");
+    
+    // 지명 목록 외 접미사 일반 정규식 안전망 (~행, ~발)
+    private static final Pattern GENERIC_DEP_PATTERN = Pattern.compile("([가-힣]{2,})\\s*(?:에서|서|발)");
+    private static final Pattern GENERIC_ARR_PATTERN = Pattern.compile("([가-힣]{2,})\\s*행");
+
     private static final Pattern MONTH_DAY_PATTERN = Pattern.compile("(\\d{1,2})\\s*월\\s*(\\d{1,2})\\s*일");
     private static final Pattern NEXT_MONTH_DAY_PATTERN = Pattern.compile("다음\\s*달\\s*(\\d{1,2})\\s*일");
+    private static final Pattern DAY_OF_MONTH_PATTERN = Pattern.compile("(?:돌아오는|다가오는|이번\\s*달)?\\s*(\\d{1,2})\\s*일");
     private static final Pattern DAY_AFTER_PATTERN = Pattern.compile("(\\d+)\\s*일\\s*(?:뒤|후)");
     private static final Pattern HOUR_AFTER_PATTERN = Pattern.compile("(\\d+)\\s*시간\\s*(?:뒤|후)");
-    private static final Pattern DAY_OF_MONTH_PATTERN = Pattern.compile("(?:돌아오는|다가오는|이번\\s*달)?\\s*(\\d{1,2})\\s*일");
+    private static final Pattern MINUTE_AFTER_PATTERN = Pattern.compile("(\\d+)\\s*분\\s*(?:뒤|후)");
+    
     private static final Pattern THIS_WEEKDAY_PATTERN = Pattern.compile("이번\\s*주\\s*([월화수목금토일])(?:요일)?");
     private static final Pattern NEXT_WEEKDAY_PATTERN = Pattern.compile("다음\\s*주\\s*([월화수목금토일])(?:요일)?");
     private static final Pattern WEEKDAY_PATTERN = Pattern.compile("(?:돌아오는|다가오는)?\\s*([월화수목금토일])요일");
-    private static final Pattern TIME_PATTERN = Pattern.compile("(오전|오후)?\\s*(\\d{1,2})\\s*시\\s*(?:(\\d{1,2})\\s*분|반)?");
-    private static final Pattern PASSENGER_PATTERN = Pattern.compile("(\\d+)\\s*(?:명|장)");
+    
+    // 24시간제 세부 시간 정규식 (새벽, 아침, 낮, 점심, 저녁, 밤, 심야)
+    private static final Pattern TIME_PATTERN = Pattern.compile("(새벽|아침|낮|점심|저녁|밤|심야|오전|오후)?\\s*(\\d{1,2})\\s*시\\s*(?:(\\d{1,2})\\s*분|반)?");
+    private static final Pattern COLON_TIME_PATTERN = Pattern.compile("(\\d{1,2}):(\\d{2})");
+    private static final Pattern PASSENGER_PATTERN = Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표)");
 
     public RuleParse extract(String text, LocalDateTime baseDateTime) {
         String input = text == null ? "" : text.trim();
+        
         String departure = find(DEPARTURE_PATTERN, input);
+        if (departure == null) departure = find(GENERIC_DEP_PATTERN, input);
+
         String arrival = find(ARRIVAL_PATTERN, input);
+        if (arrival == null) arrival = find(GENERIC_ARR_PATTERN, input);
 
         DateTimeResolution resolution = resolveDateTime(input, baseDateTime);
         List<String> seats = extractSeatPreferences(input);
         List<String> needs = extractAccessibilityNeeds(input);
-
-        Matcher passengers = PASSENGER_PATTERN.matcher(input);
-        int passengerCount = passengers.find() ? Integer.parseInt(passengers.group(1)) : 0;
-        if (input.contains("혼자") || input.contains("한 명") || input.contains("1명")) passengerCount = 1;
-        if (input.contains("둘") || input.contains("두 명") || input.contains("2명")) passengerCount = 2;
+        int passengerCount = extractPassengers(input);
 
         return new RuleParse(
-                input.contains("취소") ? "CANCEL" : (input.contains("문의") ? "INQUIRY" : "BUS_SEARCH"),
+                input.contains("취소") ? "CANCEL" : (input.contains("문의") || input.contains("얼마") ? "INQUIRY" : "BUS_SEARCH"),
                 departure,
                 arrival,
                 resolution.date(),
                 resolution.departureTime(),
-                timePreference(input),
+                timePreference(input, resolution.departureTime()),
                 servicePreference(input),
                 busGradePreference(input),
                 passengerCount,
@@ -69,14 +76,23 @@ public class ConversationRuleExtractor {
         LocalDate date = null;
         LocalTime time = null;
 
+        // 1. N시간 뒤 / N분 뒤 (자정 롤오버 지원)
         Matcher hourAfter = HOUR_AFTER_PATTERN.matcher(text);
         if (hourAfter.find()) {
             LocalDateTime target = base.plusHours(Long.parseLong(hourAfter.group(1)));
             return new DateTimeResolution(target.toLocalDate(), target.toLocalTime().withSecond(0).withNano(0));
         }
+        Matcher minAfter = MINUTE_AFTER_PATTERN.matcher(text);
+        if (minAfter.find()) {
+            LocalDateTime target = base.plusMinutes(Long.parseLong(minAfter.group(1)));
+            return new DateTimeResolution(target.toLocalDate(), target.toLocalTime().withSecond(0).withNano(0));
+        }
+
+        // 2. N일 뒤
         Matcher dayAfter = DAY_AFTER_PATTERN.matcher(text);
         if (dayAfter.find()) date = base.toLocalDate().plusDays(Long.parseLong(dayAfter.group(1)));
 
+        // 3. M월 D일
         Matcher monthDay = MONTH_DAY_PATTERN.matcher(text);
         if (monthDay.find()) {
             int month = Integer.parseInt(monthDay.group(1));
@@ -84,6 +100,7 @@ public class ConversationRuleExtractor {
             int year = base.getYear() + (month < base.getMonthValue() ? 1 : 0);
             date = safeDate(year, month, day);
         } else {
+            // 4. 다음 달 N일
             Matcher nextMonth = NEXT_MONTH_DAY_PATTERN.matcher(text);
             if (nextMonth.find()) {
                 YearMonth next = YearMonth.from(base).plusMonths(1);
@@ -93,15 +110,25 @@ public class ConversationRuleExtractor {
             }
         }
 
+        // 5. 시각 처리 (12/24시간제 및 저녁 7시 -> 19:00 변환)
         Matcher timeMatcher = TIME_PATTERN.matcher(text);
         if (timeMatcher.find()) {
+            String ampm = timeMatcher.group(1);
             int hour = Integer.parseInt(timeMatcher.group(2));
-            int minute = "반".equals(timeMatcher.group(0).trim().substring(timeMatcher.group(0).trim().length() - 1))
-                    ? 30 : timeMatcher.group(3) == null ? 0 : Integer.parseInt(timeMatcher.group(3));
-            if ("오후".equals(timeMatcher.group(1)) && hour < 12) hour += 12;
-            if ("오전".equals(timeMatcher.group(1)) && hour == 12) hour = 0;
+            int minute = text.contains("반") ? 30 : (timeMatcher.group(3) != null ? Integer.parseInt(timeMatcher.group(3)) : 0);
+
+            if (List.of("오후", "저녁", "밤", "심야").contains(ampm) && hour < 12) hour += 12;
+            else if (List.of("낮", "점심").contains(ampm) && hour <= 6) hour += 12;
+            else if (List.of("오전", "새벽", "아침").contains(ampm) && hour == 12) hour = 0;
+
             if (hour < 24 && minute < 60) time = LocalTime.of(hour, minute);
+        } else {
+            Matcher colonMatcher = COLON_TIME_PATTERN.matcher(text);
+            if (colonMatcher.find()) {
+                time = LocalTime.of(Integer.parseInt(colonMatcher.group(1)), Integer.parseInt(colonMatcher.group(2)));
+            }
         }
+
         return new DateTimeResolution(date, time);
     }
 
@@ -112,8 +139,9 @@ public class ConversationRuleExtractor {
         if (text.contains("모레")) return baseDate.plusDays(2);
         if (text.contains("내일")) return baseDate.plusDays(1);
         if (text.contains("오늘")) return baseDate;
+        
         if (text.contains("이번 주말") || text.contains("이번주말")) {
-            return baseDate.plusDays(Math.floorMod(DayOfWeek.SATURDAY.getValue() - baseDate.getDayOfWeek().getValue(), 7));
+            return baseDate.plusDays(Math.max(0, DayOfWeek.SATURDAY.getValue() - baseDate.getDayOfWeek().getValue()));
         }
 
         Matcher thisWeekday = THIS_WEEKDAY_PATTERN.matcher(text);
@@ -127,6 +155,7 @@ public class ConversationRuleExtractor {
             return baseDate.plusDays(difference);
         }
 
+        // 돌아오는 N일 (지났으면 다음 달로 자동 롤오버)
         Matcher dayOfMonth = DAY_OF_MONTH_PATTERN.matcher(text);
         if (dayOfMonth.find()) {
             int day = Integer.parseInt(dayOfMonth.group(1));
@@ -141,84 +170,108 @@ public class ConversationRuleExtractor {
         return current;
     }
 
+    private int extractPassengers(String text) {
+        if (text.contains("혼자") || text.contains("한 명") || text.contains("1명") || text.contains("한 장") || text.contains("1장")) return 1;
+        if (text.contains("둘이") || text.contains("두 명") || text.contains("2명") || text.contains("두 장") || text.contains("2장") || text.contains("부부")) return 2;
+        
+        // 가족 호칭 + 동행 표현 -> 2명 자동 계산
+        boolean hasFamily = List.of("할머니", "할아버지", "할망", "하르방", "손주", "손자", "손녀", "손지", "영감", "바깥양반", "안사람", "집사람", "딸래미", "아들래미").stream().anyMatch(text::contains);
+        boolean hasTogether = List.of("데리고", "데꼬", "모시고", "이랑", "하고", "고치", "같이", "둘이", "탈 건데", "갈 건데").stream().anyMatch(text::contains);
+        if (hasFamily && hasTogether) return 2;
+
+        Matcher passengers = PASSENGER_PATTERN.matcher(text);
+        if (passengers.find()) {
+            String val = passengers.group(1);
+            return switch (val) {
+                case "한", "하나" -> 1;
+                case "두", "둘" -> 2;
+                case "세", "셋" -> 3;
+                case "네", "넷" -> 4;
+                default -> {
+                    try { yield Integer.parseInt(val); } catch (Exception e) { yield 1; }
+                }
+            };
+        }
+        return 1;
+    }
+
+    private List<String> extractSeatPreferences(String text) {
+        List<String> result = new ArrayList<>();
+        if (!text.contains("창가 말고") && !text.contains("창가말고") && text.contains("창가")) result.add("WINDOW");
+        if (text.contains("통로")) result.add("AISLE");
+        if (List.of("앞쪽", "앞 자리", "앞자리", "앞좌석").stream().anyMatch(text::contains)) result.add("FRONT");
+        if (text.contains("중간")) result.add("MIDDLE");
+        if (List.of("뒤쪽", "뒷자리", "뒷좌석").stream().anyMatch(text::contains)) result.add("BACK");
+        if (text.contains("혼자") || text.contains("단독")) result.add("SINGLE");
+        return result;
+    }
+
+    private List<String> extractAccessibilityNeeds(String text) {
+        List<String> result = new ArrayList<>();
+        if (List.of("다리", "무릎", "허리", "관절", "시큰", "삭신", "도가니", "지팡이", "계단", "하영 힘들", "절임").stream().anyMatch(text::contains)) {
+            result.add("WALKING_DIFFICULTY");
+        }
+        if (List.of("어르신", "할머니", "할아버지", "할망", "하르방", "손주", "손자", "손녀", "손지", "영감", "바깥양반").stream().anyMatch(text::contains)) {
+            result.add("ELDERLY_CARE");
+        }
+        if (List.of("멀미", "속이 메스", "울렁", "토해", "옴팡지게").stream().anyMatch(text::contains)) {
+            result.add("MOTION_SICKNESS");
+        }
+        return result;
+    }
+
+    private String timePreference(String text, LocalTime departureTime) {
+        if (departureTime != null) {
+            int h = departureTime.getHour();
+            if (h < 6) return "NIGHT";
+            if (h < 10) return "MORNING";
+            if (h < 17) return "AFTERNOON";
+            if (h < 21) return "EVENING";
+            return "NIGHT";
+        }
+        if (text.contains("오전") || text.contains("아침") || text.contains("새벽")) return "MORNING";
+        if (text.contains("오후") || text.contains("낮") || text.contains("점심")) return "AFTERNOON";
+        if (text.contains("저녁")) return "EVENING";
+        if (text.contains("밤") || text.contains("야간") || text.contains("심야")) return "NIGHT";
+        return "ANY";
+    }
+
+    private String servicePreference(String text) {
+        if (List.of("첫차", "시방", "싸게싸게", "젤 빠른", "일찍이").stream().anyMatch(text::contains)) return "FIRST";
+        if (text.contains("막차")) return "LAST";
+        return "ANY";
+    }
+
+    private String busGradePreference(String text) {
+        if (text.contains("우등") && !text.contains("우등 말고")) return "EXCELLENT";
+        if (List.of("프리미엄", "비싼 놈", "제일 좋은", "누워서", "억수로 편한").stream().anyMatch(text::contains)) return "PREMIUM";
+        if (List.of("일반", "고속", "싼 놈", "싼 거", "젤 싼", "제일 싼", "저렴한", "가성비").stream().anyMatch(text::contains)) return "GENERAL";
+        return "ANY";
+    }
+
     private String find(Pattern pattern, String text) {
         Matcher matcher = pattern.matcher(text);
         return matcher.find() ? matcher.group(1) : null;
     }
 
     private LocalDate safeDate(int year, int month, int day) {
-        try {
-            return LocalDate.of(year, month, day);
-        } catch (RuntimeException ignored) {
-            return null;
-        }
+        try { return LocalDate.of(year, month, day); } catch (Exception e) { return null; }
     }
 
     private int weekday(String koreanDay) {
         return switch (koreanDay) {
-            case "월" -> 1;
-            case "화" -> 2;
-            case "수" -> 3;
-            case "목" -> 4;
-            case "금" -> 5;
-            case "토" -> 6;
-            case "일" -> 7;
-            default -> throw new IllegalArgumentException("지원하지 않는 요일: " + koreanDay);
+            case "월" -> 1; case "화" -> 2; case "수" -> 3; case "목" -> 4;
+            case "금" -> 5; case "토" -> 6; case "일" -> 7;
+            default -> 1;
         };
     }
 
-    private List<String> extractSeatPreferences(String text) {
-        List<String> result = new ArrayList<>();
-        if (text.contains("창가 말고") || text.contains("창가말고")) {
-            // 뒤의 통로 선호만 추가하고 WINDOW는 넣지 않는다.
-        } else if (text.contains("창가")) result.add("WINDOW");
-        if (text.contains("통로")) result.add("AISLE");
-        if (text.contains("앞쪽") || text.contains("앞 자리") || text.contains("앞자리") || text.contains("앞좌석")) result.add("FRONT");
-        if (text.contains("중간")) result.add("MIDDLE");
-        if (text.contains("뒤쪽") || text.contains("뒷자리") || text.contains("뒷좌석") || text.contains("뒤 좌석")) result.add("BACK");
-        if (text.contains("혼자 앉") || text.contains("혼자앉")) result.add("SINGLE");
-        return result;
-    }
-
-    private List<String> extractAccessibilityNeeds(String text) {
-        List<String> result = new ArrayList<>();
-        if (text.contains("다리") || text.contains("무릎") || text.contains("허리")) result.add("WALKING_DIFFICULTY");
-        if (text.contains("어르신") || text.contains("할머니") || text.contains("할아버지")) result.add("ELDERLY_CARE");
-        if (text.contains("멀미") || text.contains("속이 메스")) result.add("MOTION_SICKNESS");
-        return result;
-    }
-
     private boolean hasSeatPreferenceExpression(String text) {
-        return text.contains("창가") || text.contains("통로") || text.contains("앞쪽") || text.contains("앞 자리")
-                || text.contains("앞자리") || text.contains("앞좌석") || text.contains("중간") || text.contains("뒤쪽") || text.contains("뒷자리")
-                || text.contains("뒷좌석") || text.contains("뒤 좌석")
-                || text.contains("혼자 앉") || text.contains("자리 아무거나") || text.contains("좌석 아무거나");
+        return List.of("창가", "통로", "앞쪽", "앞자리", "앞좌석", "중간", "뒤쪽", "뒷자리", "혼자").stream().anyMatch(text::contains);
     }
 
     private boolean hasAccessibilityExpression(String text) {
-        return text.contains("다리") || text.contains("무릎") || text.contains("허리") || text.contains("어르신")
-                || text.contains("할머니") || text.contains("할아버지") || text.contains("멀미") || text.contains("속이 메스");
-    }
-
-    private String timePreference(String text) {
-        if (text.contains("오전") || text.contains("아침")) return "MORNING";
-        if (text.contains("오후") || text.contains("낮")) return "AFTERNOON";
-        if (text.contains("저녁")) return "EVENING";
-        if (text.contains("밤") || text.contains("야간") || text.contains("심야")) return "NIGHT";
-        return null;
-    }
-
-    private String servicePreference(String text) {
-        if (text.contains("첫차")) return "FIRST";
-        if (text.contains("막차")) return "LAST";
-        return text.contains("시간 아무거나") ? "ANY" : null;
-    }
-
-    private String busGradePreference(String text) {
-        if (text.contains("우등")) return "EXCELLENT";
-        if (text.contains("프리미엄")) return "PREMIUM";
-        if (text.contains("일반") || text.contains("고속")) return "GENERAL";
-        return text.contains("등급 아무거나") || text.contains("버스 아무거나") ? "ANY" : null;
+        return List.of("다리", "무릎", "허리", "어르신", "할머니", "할아버지", "손주", "영감", "멀미", "도가니", "시큰", "삭신").stream().anyMatch(text::contains);
     }
 
     public record RuleParse(
@@ -235,9 +288,7 @@ public class ConversationRuleExtractor {
             List<String> accessibilityNeeds,
             boolean seatPreferenceMentioned,
             boolean accessibilityMentioned
-    ) {
-    }
+    ) {}
 
-    private record DateTimeResolution(LocalDate date, LocalTime departureTime) {
-    }
+    private record DateTimeResolution(LocalDate date, LocalTime departureTime) {}
 }
