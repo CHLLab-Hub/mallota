@@ -26,22 +26,35 @@ export function ConversationPanel() {
       const session: ConversationSessionResult = await parseConversation(sendText, sessionId)
       setSessionId(session.sessionId)
 
-      const dep = session.departure && session.departure !== 'null' ? session.departure : null
-      const arr = session.arrival && session.arrival !== 'null' ? session.arrival : null
-      const dt = session.date && session.date !== 'null' ? session.date : null
-
-      if (!dep || !arr || !dt) {
-        if (!dep) appSay('어디에서 출발하시나요?')
-        else if (!arr) appSay('어디로 가시나요?')
-        else appSay('언제 출발하시나요?')
+      // 파이썬이 더 물어볼 게 있으면 (clarificationPrompt) → 그걸 물어보기
+      if (session.clarificationPrompt) {
+        appSay(session.clarificationPrompt)
       } else {
-        const buses = await searchBuses({ departure: dep, arrival: arr, date: dt })
-        if (buses.length === 0) {
-          appSay('해당 조건의 버스를 찾지 못했습니다.')
+        // 더 물을 게 없으면 → 버스 검색
+        const dep = session.departure && session.departure !== 'null' ? session.departure : null
+        const arr = session.arrival && session.arrival !== 'null' ? session.arrival : null
+        const dt = session.date && session.date !== 'null' ? session.date : null
+
+        if (!dep || !arr || !dt) {
+          // 안전망: 혹시 필수값 없으면 되묻기
+          appSay('출발지, 도착지, 날짜를 말씀해 주세요.')
         } else {
           appSay('조건에 맞는 버스를 찾았어요. 추천 버스를 보여드릴게요.')
-          setBuses(buses)
-          setTimeout(() => setScreen('bus'), 800)
+          const buses = await searchBuses({
+            departure: dep,
+            arrival: arr,
+            date: dt,
+            departureTime: session.departureTime,
+            timePreference: session.timePreference,
+            servicePreference: session.servicePreference,
+            busGradePreference: session.busGradePreference,
+          })
+          if (buses.length === 0) {
+            appSay('해당 조건의 버스를 찾지 못했습니다.')
+          } else {
+            setBuses(buses)
+            setTimeout(() => setScreen('bus'), 800)
+          }
         }
       }
     } catch (error) {
