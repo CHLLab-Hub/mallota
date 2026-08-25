@@ -37,15 +37,20 @@ public class ConversationController {
     public ConversationSessionResponse parse(@Valid @RequestBody ConversationParseRequest request) {
         ConversationSession session = sessionService.getOrCreate(request.sessionId());
 
-        ConversationParseResponse parsed = parseService.parse(request);
+        ConversationParseResponse parsed = parseService.parse(request, session);
         if (parsed != null) {
             session.mergeConditions(
                     parsed.departure(),
                     parsed.arrival(),
                     parsed.date(),
+                    parsed.departureTime(),
                     parsed.timePreference(),
+                    parsed.servicePreference(),
+                    parsed.busGradePreference(),
+                    parsed.passengers(),
                     parsed.seatPreferences(),
-                    parsed.accessibilityNeeds()
+                    parsed.accessibilityNeeds(),
+                    parsed.clarificationPrompt()
             );
         }
 

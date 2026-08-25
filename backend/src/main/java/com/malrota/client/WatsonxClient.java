@@ -33,4 +33,10 @@ public class WatsonxClient {
                 .toAssistantMessage();
         return response.content();
     }
+
+    public boolean isConfigured() {
+        return properties.enabled()
+                && properties.apiKey() != null && !properties.apiKey().isBlank()
+                && properties.projectId() != null && !properties.projectId().isBlank();
+    }
 }

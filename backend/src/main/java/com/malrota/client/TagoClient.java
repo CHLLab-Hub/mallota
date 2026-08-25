@@ -139,7 +139,9 @@ public class TagoClient {
                 new BusSchedule("R03", "우등", "서울경부", "대전복합", date + "0900", date + "1030", 16000),
                 new BusSchedule("R04", "일반", "서울경부", "대전복합", date + "1000", date + "1130", 11000),
                 new BusSchedule("R05", "프리미엄", "서울경부", "대전복합", date + "1130", date + "1300", 20800),
-                new BusSchedule("R06", "우등", "서울경부", "대전복합", date + "1400", date + "1530", 16000)
+                new BusSchedule("R06", "우등", "서울경부", "대전복합", date + "1400", date + "1530", 16000),
+                new BusSchedule("R07", "우등", "서울경부", "대전복합", date + "1900", date + "2030", 16000),
+                new BusSchedule("R08", "우등", "서울경부", "대전복합", date + "2100", date + "2230", 16000)
         );
     }
 }
