@@ -34,7 +34,7 @@ class WatsonxNluExtractor:
         self.api_key = os.getenv("WATSONX_API_KEY")
         self.project_id = os.getenv("WATSONX_PROJECT_ID")
         self.url = os.getenv("WATSONX_URL", "https://us-south.ml.cloud.ibm.com")
-        self.model_id = 'meta-llama/llama-3-3-70b-instruct'
+        self.model_id = 'mistralai/mistral-small-3-1-24b-instruct-2503'
 
     def extract(self, req: ConversationParseRequest) -> ConversationParseResponse:
         now = datetime.now()
