@@ -3,13 +3,12 @@ package com.malrota.dto.request;
 import java.util.List;
 
 public record SeatRecommendRequest(
-    List<String> seatPreferences,
-    List<String> accessibilityNeeds,
-    String busGrade,
-    Integer passengers // 인원수 추가
+        String busGrade,                  // 버스 등급 (우등, 고속 등 — 나중에 등급별 좌석에 쓸 것)
+        List<String> seatPreferences,     // 좌석 선호 (WINDOW, FRONT 등)
+        List<String> accessibilityNeeds,   // 접근성 요구 (WALKING_DIFFICULTY 등)
+        Integer passengers
 ) {
-    // 3개 필드만 받는 기존 호출도 호환
-    public SeatRecommendRequest(List<String> seatPreferences, List<String> accessibilityNeeds, String busGrade) {
-        this(seatPreferences, accessibilityNeeds, busGrade, 1);
-    }
+        public SeatRecommendRequest(String busGrade, List<String> seatPreferences, List<String> accessibilityNeeds){
+                this(busGrade, seatPreferences, accessibilityNeeds, 1);
+        }        
 }

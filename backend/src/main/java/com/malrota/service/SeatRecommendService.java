@@ -92,6 +92,9 @@ public class SeatRecommendService {
             PairCandidate best = availablePairs.get(0);
             PairDefinition bestDef = best.def;
 
+            Seat s1 = seatMap.get(bestDef.no1());
+            Seat s2 = seatMap.get(bestDef.no2());
+
             List<String> reasons = new ArrayList<>();
             String combinedNo = bestDef.no1 + ", " + bestDef.no2;
 
@@ -112,8 +115,7 @@ public class SeatRecommendService {
                         preferredSectionKorean, actualSectionKorean, combinedNo));
             }
 
-            Seat representativeSeat = new Seat(combinedNo, bestDef.position, "PAIR", true);
-            return new SeatRecommendation(representativeSeat, best.score, reasons, List.of(), seats);
+            return new SeatRecommendation(s1, best.score(), reasons, List.of(s2), seats);
         }
 
         return null; // 연석이 아예 없을 때만 개별 좌석으로 폴백

@@ -2,7 +2,7 @@ import type { Seat } from './types'
 
 interface SeatMapProps {
   seats: Seat[]              // 전체 좌석
-  recommendedNo: string      // 추천 좌석 번호
+  recommendedNo: string      // 추천 좌석 번호 (예: "1B" 또는 "1B, 1C")
   alternativeNos: string[]   // 동률 대안 좌석 번호들
   selectedNo?: string        // 사용자가 고른 좌석
   onSelect?: (seat: Seat) => void  // 좌석 클릭 시
@@ -21,11 +21,17 @@ export function SeatMap({ seats, recommendedNo, alternativeNos, selectedNo, onSe
   const sortedRows = Array.from(rows.entries()).sort((a, b) => a[0] - b[0])
 
   function seatColor(seat: Seat): string {
-    if (!seat.available) return '#cbd5e1'        // 예약됨 = 회색
+    if (!seat.available) return '#cbd5e1'              // 예약됨 = 회색
     if (seat.seatNo === selectedNo) return '#2563eb'   // 내가 고른 = 파랑
-    if (seat.seatNo === recommendedNo) return '#16a34a' // 추천 = 초록
-    if (alternativeNos.includes(seat.seatNo)) return '#86efac' // 동률 대안 = 연초록
-    return '#f1f5f9'                              // 빈 자리 = 흰색
+
+    // 쉼표로 연결된 "1B, 1C" 연석 번호도 1B와 1C 둘 다 진한 초록색으로 칠하도록 수정!
+    const recommendedList = recommendedNo
+      ? recommendedNo.split(',').map((s) => s.trim())
+      : []
+    if (recommendedList.includes(seat.seatNo)) return '#16a34a' // 추천 = 초록
+
+    if (alternativeNos.includes(seat.seatNo)) return '#86efac'  // 동률 대안 = 연초록
+    return '#dcdcdc'                                    // 빈 자리 = 밝은 회색
   }
 
   return (
@@ -41,7 +47,7 @@ export function SeatMap({ seats, recommendedNo, alternativeNos, selectedNo, onSe
           const totalCols = Math.max(...sorted.map((s) => s.column))
           return (
             <div key={rowNum} style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              {sorted.map((seat, idx) => {
+              {sorted.map((seat) => {
                 // 통로 표현: 3칸이면 2번째 뒤, 4칸이면 2번째 뒤에 간격
                 const aisleAfter = totalCols <= 3 ? 2 : 2
                 const showAisle = seat.column === aisleAfter && seat.column < totalCols
@@ -59,6 +65,7 @@ export function SeatMap({ seats, recommendedNo, alternativeNos, selectedNo, onSe
                         background: seatColor(seat),
                         color: seat.available ? '#0f172a' : '#94a3b8',
                         fontSize: '0.8rem',
+                        fontWeight: recommendedNo?.includes(seat.seatNo) ? 'bold' : 'normal',
                         cursor: seat.available && onSelect ? 'pointer' : 'default',
                       }}
                     >

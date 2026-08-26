@@ -33,7 +33,8 @@ type Stage = 'chat' | 'payment' | 'ticket'
 export function ConversationPanel() {
   const [text, setText] = useState('')
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [message, setMessage] = useState('어디로 가실 예정인지 말씀해 주세요.')
+  const [session, setSession] = useState<ConversationSessionResult | null>(null)
+  const [message, setMessage] = useState("어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.")
   const [loading, setLoading] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [error, setError] = useState<string | null>(null)
@@ -45,8 +46,10 @@ export function ConversationPanel() {
 
   const { recording, startRecording, stopRecording } = useVoiceRecorder()
 
-  // 최종 확정된 좌석 (직접 선택했으면 그것, 아니면 추천)
-  const finalSeatNo = selectedSeat ?? seat?.bestSeat?.seatNo ?? ''
+  const hasPair = (session?.passengers ?? 1) >= 2 && seat?.alternatives && seat.alternatives.length > 0;
+  const finalSeatNo = selectedSeat ?? (hasPair
+    ? `${seat?.bestSeat?.seatNo}, ${seat?.alternatives[0]?.seatNo}`
+    : (seat?.bestSeat?.seatNo ?? ''));
 
   async function speak(text: string) {
     if (!text.trim()) return
@@ -93,6 +96,7 @@ export function ConversationPanel() {
     try {
       const session: ConversationSessionResult = await parseConversation(text, sessionId)
       setSessionId(session.sessionId)
+      setSession(session)
       setText('')
 
       // 백엔드가 보낸 질문(누락 질문 또는 약자/좌석 배려 질문)이 있으면 우선 질문하고 대기!
@@ -144,8 +148,13 @@ export function ConversationPanel() {
           })
           setSeat(seatData)
 
+        const isPair = (session.passengers ?? 1) >= 2 && seatData.alternatives && seatData.alternatives.length > 0;
+        const seatText = isPair 
+          ? `${seatData.bestSeat?.seatNo}, ${seatData.alternatives[0]?.seatNo}` 
+          : (seatData.bestSeat?.seatNo ?? '');
+
         const reasonText = seatData.reasons && seatData.reasons.length > 0 ? seatData.reasons[0] : ''
-        const msg = `${formatTime(chosenBus.departureTime)} 출발 ${chosenBus.grade} 버스입니다. ${reasonText} 추천 좌석은 ${seatData.bestSeat?.seatNo ?? ''}번입니다.`
+        const msg = `${formatTime(chosenBus.departureTime)} 출발 ${chosenBus.grade} 버스입니다. ${reasonText} 추천 좌석은 ${seatText}번입니다.`
         setMessage(msg)
         speak(msg)
       }
@@ -168,7 +177,7 @@ export function ConversationPanel() {
     setSelectedSeat(null)
     setSelecting(false)
     setSessionId(null)
-    setMessage('어디로 가실 예정인지 말씀해 주세요.')
+    setMessage("어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.")
   }
 
   // 티켓 화면
@@ -270,8 +279,8 @@ export function ConversationPanel() {
 
           <SeatMap
             seats={seat.allSeats}
-            recommendedNo={seat.bestSeat.seatNo}
-            alternativeNos={seat.alternatives.map((s) => s.seatNo)}
+            recommendedNo={finalSeatNo} // 👈 finalSeatNo ("1B, 1C") 전달
+            alternativeNos={hasPair ? [] : seat.alternatives.map((s) => s.seatNo)}
             selectedNo={selectedSeat ?? undefined}
             onSelect={selecting ? (s) => setSelectedSeat(s.seatNo) : undefined}
           />

@@ -6,9 +6,10 @@ import type {
 } from '../features/conversation/types'
 
 export interface SeatRecommendRequest {
-  busGrade: string
-  seatPreferences: SeatPreference[]
-  accessibilityNeeds: AccessibilityNeed[]
+  seatPreferences?: SeatPreference[] | string[];
+  accessibilityNeeds?: AccessibilityNeed[] | string[];
+  busGrade: string;
+  passengers?: number;
 }
 
 export function recommendSeat(
