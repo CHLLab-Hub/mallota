@@ -44,4 +44,24 @@ class ConversationRuleExtractorTest {
         assertThat(result.servicePreference()).isEqualTo("FIRST");
         assertThat(result.passengers()).isEqualTo(2);
     }
+
+    @Test
+    void treats_full_input_matching_a_terminal_alias_as_standalone_not_departure() {
+        // "부산서부"는 그 자체가 등록된 터미널명이라 뒤에 조사가 없다. 예전에는 짧은 별칭 "부산" +
+        // 우연히 남은 "서"를 출발지 조사로 잘못 묶어 departure="부산"으로 오인식했다 (도착지 세부
+        // 터미널을 되묻는 반문에 답했을 뿐인데 출발지가 뒤바뀌는 버그).
+        var result = extractor.extract("부산서부", base);
+
+        assertThat(result.departure()).isNull();
+        assertThat(result.arrival()).isNull();
+        assertThat(result.standaloneTerminal()).isEqualTo("부산서부");
+    }
+
+    @Test
+    void does_not_confuse_a_full_sentence_that_merely_contains_a_terminal_name() {
+        var result = extractor.extract("천안에서 부산가는 버스 알려줘", base);
+
+        assertThat(result.departure()).isEqualTo("천안고속");
+        assertThat(result.arrival()).isEqualTo("부산");
+    }
 }

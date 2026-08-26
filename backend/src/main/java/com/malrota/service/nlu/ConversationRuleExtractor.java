@@ -24,8 +24,13 @@ public class ConversationRuleExtractor {
 
     private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(?:출발(?:지)?[:\\s]*)?(" + TERMINALS + ")\\s*(?:에서|서|발)");
     private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))");
-    private static final Pattern GENERIC_DEP_PATTERN = Pattern.compile("([가-힣]{2,})\\s*(?:에서|서|발)");
-    private static final Pattern GENERIC_ARR_PATTERN = Pattern.compile("([가-힣]{2,})\\s*행");
+    // "서"/"발"은 지명에 곧바로 붙는 축약 조사라 사이에 공백이 있으면 안 됨(그렇지 않으면 "오전 서울에서"의
+    // "오전"이 "서울"의 "서"를 조사로 잘못 삼켜버림). "(?<!에)서"는 "에서"의 "서"만 따로 매치되는 것도 방지.
+    private static final Pattern GENERIC_DEP_PATTERN = Pattern.compile("([가-힣]{2,})(?:\\s*에서|(?<!에)서|발)(?![가-힣])");
+    // "서울", "대전"처럼 등록되지 않은 도시명 자체는 TERMINALS 목록에 없어 ARRIVAL_PATTERN이 못 잡으므로,
+    // "행"뿐 아니라 ARRIVAL_PATTERN과 같은 동사 어미("가는데", "가고" 등)도 함께 허용한다.
+    private static final Pattern GENERIC_ARR_PATTERN = Pattern.compile(
+            "([가-힣]{2,})\\s*(?:행|(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))(?![가-힣])");
 
     private static final Pattern MONTH_DAY_PATTERN = Pattern.compile("(\\d{1,2})\\s*월\\s*(\\d{1,2})\\s*일");
     private static final Pattern NEXT_MONTH_DAY_PATTERN = Pattern.compile("다음\\s*달\\s*(\\d{1,2})\\s*일");
@@ -44,26 +49,41 @@ public class ConversationRuleExtractor {
     public RuleParse extract(String text, LocalDateTime baseDateTime) {
         String input = text == null ? "" : text.trim();
 
-        String arrival = find(ARRIVAL_PATTERN, input);
-        if (arrival == null) arrival = find(GENERIC_ARR_PATTERN, input);
+        // 발화 전체가 등록된 터미널명/별칭 그 자체와 완전히 일치하는 경우("부산서부" 등 반문에 대한 단답)를
+        // 최우선으로 식별한다. TERMINALS 정규식은 "부산서부" 같은 긴 터미널명이 뒤에 아무 조사도 없이
+        // 단독으로 오면 매칭에 실패하고, 그 안에 포함된 짧은 터미널명("부산")과 우연히 남은 글자("서")를
+        // 조사로 잘못 묶어 엉뚱한 출발/도착지로 오인식하는 문제가 있었다. 완전 일치를 먼저 확인해
+        // 이 오인식을 원천 차단하고, 방향 배정은 세션 문맥을 아는 ConversationParseService에 맡긴다.
+        String wholeInputAsTerminal = findStandaloneTerminal(input);
+        boolean isStandaloneTerminalToken = wholeInputAsTerminal != null
+                && TagoClient.allNamesAndAliases().contains(input.replaceAll("\\s+", ""));
 
-        String departure = find(DEPARTURE_PATTERN, input);
-        if (departure == null) departure = find(GENERIC_DEP_PATTERN, input);
-
-        // 단독 단어 입력(조사 없는 "강남", "사상")은 특정 방향으로 단정짓지 않고 식별만 수행!
+        String arrival = null;
+        String departure = null;
         String standalone = null;
-        if (departure == null && arrival == null && input.length() <= 10) {
-            standalone = findStandaloneTerminal(input);
+
+        if (isStandaloneTerminalToken) {
+            standalone = wholeInputAsTerminal;
+        } else {
+            arrival = find(ARRIVAL_PATTERN, input);
+            if (arrival == null) arrival = find(GENERIC_ARR_PATTERN, input);
+
+            departure = find(DEPARTURE_PATTERN, input);
+            if (departure == null) departure = find(GENERIC_DEP_PATTERN, input);
+
+            // 단독 단어 입력(조사 없는 "강남", "사상")은 특정 방향으로 단정짓지 않고 식별만 수행!
+            if (departure == null && arrival == null && input.length() <= 10) {
+                standalone = findStandaloneTerminal(input);
+            }
         }
 
-        // 지명 표준명으로 정규화
+        // 지명 표준명으로 정규화 (단, "서울"처럼 터미널이 여러 개인 도시명은 임의로 하나를 골라버리면
+        // 세부 터미널을 되묻는 흐름(TagoClient.isMultiTerminalCity)이 깨지므로 그대로 둔다)
         if (arrival != null) {
-            String canon = TagoClient.resolveCanonicalName(arrival);
-            if (canon != null) arrival = canon;
+            arrival = canonicalizeTerminal(arrival);
         }
         if (departure != null) {
-            String canon = TagoClient.resolveCanonicalName(departure);
-            if (canon != null) departure = canon;
+            departure = canonicalizeTerminal(departure);
         }
         // 날짜, 시간, 좌석, 약자, 인원 추출
         DateTimeResolution resolution = resolveDateTime(input, baseDateTime);
@@ -89,6 +109,17 @@ public class ConversationRuleExtractor {
                 hasAccessibilityExpression(input),
                 standalone
         );
+    }
+
+    /**
+     * 지명 표준명 정규화. "서울", "대전"처럼 터미널이 여럿인 도시명 그 자체는 그대로 두어
+     * ConversationParseService가 세부 터미널을 되묻도록 한다. "강남", "동대구"처럼 특정
+     * 터미널(별칭)을 콕 집은 경우에만 정식 명칭으로 치환한다.
+     */
+    private String canonicalizeTerminal(String raw) {
+        if (TagoClient.isMultiTerminalCity(raw)) return raw;
+        String canon = TagoClient.resolveCanonicalName(raw);
+        return canon != null ? canon : raw;
     }
 
     /** 단독 지명 입력 처리 헬퍼 (TagoClient 연동) */

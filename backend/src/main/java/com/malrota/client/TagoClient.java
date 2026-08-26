@@ -99,7 +99,7 @@ public class TagoClient {
         String matched = matchTerminalId(clean);
         if (matched != null) return matched;
 
-        // 3. 서비스키가 있으면 실제 TAGO 터미널 목록 검색 API 호출
+        // 서비스키가 있으면 실제 TAGO 터미널 목록 검색 API 호출
         if (properties.serviceKey() != null && !properties.serviceKey().isBlank()) {
             try {
                 String url = properties.baseUrl() + "/GetExpBusTrminlList"

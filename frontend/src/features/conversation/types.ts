@@ -45,6 +45,7 @@ export interface SeatRecommendation {
   score: number
   reasons: string[]
   alternatives: Seat[]
+  adjacentPair: boolean   // alternatives가 bestSeat과 나란히 붙은 연석인지
   allSeats: Seat[]
 }
 

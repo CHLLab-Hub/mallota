@@ -32,7 +32,7 @@ class ConversationControllerIntegrationTest {
                 .andExpect(jsonPath("$.state").value("COLLECTING_CONDITIONS"))
                 .andExpect(jsonPath("$.departure").value("서울"))
                 .andExpect(jsonPath("$.arrival").value("대전"))
-                .andExpect(jsonPath("$.clarificationPrompt").value("언제 출발하시나요? 오늘, 내일, 이번 주 토요일처럼 말씀해 주세요."));
+                .andExpect(jsonPath("$.clarificationPrompt").value("언제 출발하시나요? '내일 아침', '이번 주말 오후'처럼 날짜와 시간대를 편하게 말씀해 주세요."));
 
         mockMvc.perform(post("/api/conversation/parse")
                         .contentType(MediaType.APPLICATION_JSON)
