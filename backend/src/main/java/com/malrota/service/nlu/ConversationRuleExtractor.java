@@ -24,6 +24,15 @@ public class ConversationRuleExtractor {
 
     private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(?:출발(?:지)?[:\\s]*)?(" + TERMINALS + ")\\s*(?:에서|서|발)");
     private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))");
+    // "서울에서 대전으로 가요"처럼 한 문장에 출발지와 도착지가 함께 있을 때는
+    // 터미널 별칭/LLM 추측보다 이 문장 구조를 우선한다. 두 도시가 같은 값으로 덮이는 것을 막는다.
+    private static final Pattern ROUTE_PATTERN = Pattern.compile(
+            // 목적지 뒤에 "내일 오전 9시" 같은 조건이 이어져도 출발/도착을 먼저 잡는다.
+            "([가-힣]{2,}?)에서\\s*([가-힣]{2,}?)(?:으로|로|에)(?=\\s|$|[0-9가-힣])");
+    // "동서울 말고 센트럴로 바꿔줘"처럼 기존 터미널을 수정하는 문장. 두 이름 모두
+    // 등록된 터미널/별칭일 때만 잡으므로 일반적인 "A 말고 B" 표현과 혼동하지 않는다.
+    private static final Pattern TERMINAL_CORRECTION_PATTERN = Pattern.compile(
+            "(" + TERMINALS + ")\\s*(?:말고|말구)\\s*(" + TERMINALS + ")\\s*(?:으로|로|에)?(?=\\s|$|[,.!?])");
     private static final Pattern GENERIC_DEP_PATTERN = Pattern.compile("([가-힣]{2,})(?:\\s*에서|(?<!에)서|발)(?![가-힣])");
     private static final Pattern GENERIC_ARR_PATTERN = Pattern.compile(
             "([가-힣]{2,})\\s*(?:행|(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))(?![가-힣])");
@@ -42,7 +51,8 @@ public class ConversationRuleExtractor {
     // 시각의 시(hour)는 "8시"처럼 숫자로도, "여덟 시"/"한 시"처럼 순우리말 수사로도 말함
     private static final Pattern TIME_PATTERN = Pattern.compile(
             "(새벽|아침|낮|점심|저녁|밤|심야|오전|오후)?\\s*(\\d{1,2}|열두|열한|다섯|여섯|일곱|여덟|아홉|한|두|세|네|열)\\s*시\\s*(?:(\\d{1,2})\\s*분|반)?");
-    private static final Pattern PASSENGER_PATTERN = Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|분|식구)");
+    // "30분 뒤"의 분은 시간 단위이며 탑승 인원으로 취급하면 안 된다.
+    private static final Pattern PASSENGER_PATTERN = Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|식구|분(?!\\s*(?:뒤|후)))");
 
     public RuleParse extract(String text, LocalDateTime baseDateTime) {
         String input = text == null ? "" : text.trim();
@@ -60,16 +70,28 @@ public class ConversationRuleExtractor {
         if (isStandaloneTerminalToken) {
             standalone = wholeInputAsTerminal;
         } else {
-            arrival = find(ARRIVAL_PATTERN, input);
-            if (arrival == null) {
-                String genericArrival = find(GENERIC_ARR_PATTERN, input);
-                if (genericArrival != null && isPlausibleTerminal(genericArrival)) arrival = genericArrival;
-            }
+            Matcher correctionMatcher = TERMINAL_CORRECTION_PATTERN.matcher(input);
+            if (correctionMatcher.find()) {
+                // 앞의 이름은 "말고"로 거절한 기존 값이고, 뒤의 이름만 새 선택지다.
+                standalone = canonicalizeTerminal(correctionMatcher.group(2));
+            } else {
+                Matcher routeMatcher = ROUTE_PATTERN.matcher(input);
+                if (routeMatcher.find()) {
+                    departure = routeMatcher.group(1);
+                    arrival = routeMatcher.group(2);
+                } else {
+                    arrival = find(ARRIVAL_PATTERN, input);
+                    if (arrival == null) {
+                        String genericArrival = find(GENERIC_ARR_PATTERN, input);
+                        if (genericArrival != null && isPlausibleTerminal(genericArrival)) arrival = genericArrival;
+                    }
 
-            departure = find(DEPARTURE_PATTERN, input);
-            if (departure == null) {
-                String genericDeparture = find(GENERIC_DEP_PATTERN, input);
-                if (genericDeparture != null && isPlausibleTerminal(genericDeparture)) departure = genericDeparture;
+                    departure = find(DEPARTURE_PATTERN, input);
+                    if (departure == null) {
+                        String genericDeparture = find(GENERIC_DEP_PATTERN, input);
+                        if (genericDeparture != null && isPlausibleTerminal(genericDeparture)) departure = genericDeparture;
+                    }
+                }
             }
 
             // 단독 단어 입력(조사 없는 "강남", "사상")은 특정 방향으로 단정짓지 않고 식별만 수행
@@ -93,6 +115,10 @@ public class ConversationRuleExtractor {
         int passengerCount = extractPassengers(input);
         boolean passengerMentioned = hasPassengerExpression(input);
 
+        // "8시", "12시", "한 시"처럼 오전/오후가 없으면 같은 시각이 두 개 존재한다.
+        // 예매 시간은 추측하지 않고 반드시 되묻게 한다.
+        boolean ambiguousMeridiem = hasAmbiguousMeridiem(input) && resolution.departureTime() == null;
+
         return new RuleParse(
                 input.contains("취소") ? "CANCEL" : (input.contains("문의") || input.contains("얼마") ? "INQUIRY" : "BUS_SEARCH"),
                 departure,
@@ -110,7 +136,8 @@ public class ConversationRuleExtractor {
                 hasAccessibilityExpression(input),
                 standalone,
                 wantsEarlierBus(input),
-                wantsLaterBus(input)
+                wantsLaterBus(input),
+                ambiguousMeridiem
         );
     }
 
@@ -193,7 +220,8 @@ public class ConversationRuleExtractor {
         while (timeMatcher.find()) {
             String ampm = timeMatcher.group(1);
             int hour = koreanHourToNumber(timeMatcher.group(2));
-            int minute = text.contains("반") ? 30 : (timeMatcher.group(3) != null ? Integer.parseInt(timeMatcher.group(3)) : 0);
+            // "일반"처럼 발화의 다른 단어에 들어 있는 '반'이 시각에 영향을 주면 안 된다.
+            int minute = timeMatcher.group(0).contains("반") ? 30 : (timeMatcher.group(3) != null ? Integer.parseInt(timeMatcher.group(3)) : 0);
 
             // ampm은 "8시"처럼 오전/오후 표현 없이 시각만 말한 경우 null일 수 있다 (List.of(...).contains(null)은
             // NullPointerException을 던지므로 반드시 null 체크 후에 검사해야 한다).
@@ -201,6 +229,9 @@ public class ConversationRuleExtractor {
             else if (ampm != null && List.of("낮", "점심").contains(ampm) && hour <= 6) hour += 12;
             else if (ampm != null && List.of("오전", "새벽", "아침").contains(ampm) && hour == 12) hour = 0;
 
+            // 오전/오후 없는 12시는 자정과 정오 중 어느 쪽인지 알 수 없다.
+            // 오전/오후가 없는 시각은 24시간제인지 12시간제인지 알 수 없으므로 확정하지 않는다.
+            if (ampm == null) continue;
             if (hour < 24 && minute < 60) time = LocalTime.of(hour, minute);
         }
 
@@ -224,6 +255,15 @@ public class ConversationRuleExtractor {
             case "열두" -> 12;
             default -> Integer.parseInt(value);
         };
+    }
+
+    private boolean hasAmbiguousMeridiem(String text) {
+        Matcher matcher = TIME_PATTERN.matcher(text);
+        while (matcher.find()) {
+            String ampm = matcher.group(1);
+            if (ampm == null) return true;
+        }
+        return false;
     }
 
     private LocalDate resolveWeekdayOrRelativeDay(String text, LocalDateTime base, LocalDate current) {
@@ -307,13 +347,20 @@ public class ConversationRuleExtractor {
 
     private List<String> extractSeatPreferences(String text) {
         List<String> result = new ArrayList<>();
-        if (!text.contains("창가 말고") && !text.contains("창가말고") && text.contains("창가")) result.add("WINDOW");
-        if (text.contains("통로")) result.add("AISLE");
-        if (List.of("앞쪽", "앞 자리", "앞자리", "앞좌석").stream().anyMatch(text::contains)) result.add("FRONT");
-        if (text.contains("중간")) result.add("MIDDLE");
-        if (List.of("뒤쪽", "뒷자리", "뒷좌석").stream().anyMatch(text::contains)) result.add("BACK");
+        if (!isRejected(text, "창가") && text.contains("창가")) result.add("WINDOW");
+        if (!isRejected(text, "통로") && text.contains("통로")) result.add("AISLE");
+        if (!isRejected(text, "앞쪽", "앞 자리", "앞자리", "앞좌석")
+                && List.of("앞쪽", "앞 자리", "앞자리", "앞좌석").stream().anyMatch(text::contains)) result.add("FRONT");
+        if (!isRejected(text, "중간") && text.contains("중간")) result.add("MIDDLE");
+        if (!isRejected(text, "뒤쪽", "뒷자리", "뒷좌석")
+                && List.of("뒤쪽", "뒷자리", "뒷좌석").stream().anyMatch(text::contains)) result.add("BACK");
         if (text.contains("혼자") || text.contains("단독")) result.add("SINGLE");
         return result;
+    }
+
+    private boolean isRejected(String text, String... expressions) {
+        return Arrays.stream(expressions).anyMatch(expression ->
+                text.contains(expression + " 말고") || text.contains(expression + "말고"));
     }
 
     private List<String> extractAccessibilityNeeds(String text) {
@@ -378,7 +425,7 @@ public class ConversationRuleExtractor {
     }
 
     private boolean hasSeatPreferenceExpression(String text) {
-        return List.of("창가", "통로", "앞쪽", "앞자리", "앞좌석", "중간", "뒤쪽", "뒷자리", "혼자").stream().anyMatch(text::contains);
+        return List.of("창가", "통로", "앞쪽", "앞자리", "앞좌석", "중간", "뒤쪽", "뒷자리", "뒷좌석", "혼자").stream().anyMatch(text::contains);
     }
 
     private boolean hasAccessibilityExpression(String text) {
@@ -402,7 +449,8 @@ public class ConversationRuleExtractor {
         boolean accessibilityMentioned,
         String standaloneTerminal,
         boolean wantsEarlierBus,
-        boolean wantsLaterBus
+        boolean wantsLaterBus,
+        boolean ambiguousMeridiem
     ) {}
 
     private record DateTimeResolution(LocalDate date, LocalTime departureTime) {}

@@ -9,6 +9,14 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ConversationRuleExtractorTest {
 
     private final ConversationRuleExtractor extractor = new ConversationRuleExtractor();
+
+    @Test
+    void keeps_departure_and_arrival_distinct_for_a_full_route_sentence() {
+        var result = extractor.extract("서울에서 대전으로 가는 버스 예약해줘", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.departure()).isEqualTo("서울");
+        assertThat(result.arrival()).isEqualTo("대전");
+    }
     private final LocalDateTime base = LocalDateTime.of(2026, 8, 24, 10, 0);
 
     @Test
@@ -84,11 +92,12 @@ class ConversationRuleExtractorTest {
     }
 
     @Test
-    void resolves_bare_hour_without_am_pm_marker_without_crashing() {
-        // "8시"처럼 오전/오후 표현 없이 시각만 말하면 24시간제 그대로(08:00) 해석한다.
+    void marks_bare_hour_as_ambiguous_without_guessing_am_or_pm() {
+        // "8시"처럼 오전/오후 표현이 없으면 예매 시각을 임의로 확정하면 안 된다.
         var result = extractor.extract("8시 버스로 주세요", base);
 
-        assertThat(result.departureTime()).hasToString("08:00");
+        assertThat(result.departureTime()).isNull();
+        assertThat(result.ambiguousMeridiem()).isTrue();
     }
 
     @Test
@@ -132,5 +141,60 @@ class ConversationRuleExtractorTest {
         assertThat(extractor.extract("여섯이 갈게요", base).passengers()).isEqualTo(6);
         assertThat(extractor.extract("여섯 명이요", base).passengers()).isEqualTo(6);
         assertThat(extractor.extract("다섯 명 예매할게요", base).passengers()).isEqualTo(5);
+    }
+
+    @Test
+    void extracts_full_terminal_route_even_when_time_and_preferences_follow() {
+        var result = extractor.extract("서울경부에서 대전복합으로 내일 오전 9시 한 명 창가", base);
+
+        assertThat(result.departure()).isEqualTo("서울경부");
+        assertThat(result.arrival()).isEqualTo("대전복합");
+        assertThat(result.departureTime()).hasToString("09:00");
+    }
+
+    @Test
+    void does_not_treat_relative_minutes_as_passengers() {
+        var result = extractor.extract("30분 뒤 출발할게요", base);
+
+        assertThat(result.passengers()).isZero();
+        assertThat(result.passengerMentioned()).isFalse();
+        assertThat(result.departureTime()).hasToString("10:30");
+    }
+
+    @Test
+    void keeps_exact_time_when_the_word_general_contains_ban() {
+        var result = extractor.extract("내일 오전 9시 일반으로 갈게요", base);
+
+        assertThat(result.departureTime()).hasToString("09:00");
+        assertThat(result.busGradePreference()).isEqualTo("GENERAL");
+    }
+
+    @Test
+    void applies_the_preference_after_a_negative_seat_correction_only() {
+        var window = extractor.extract("통로 말고 창가로 해줘", base);
+        var back = extractor.extract("앞자리 말고 뒷자리로 해줘", base);
+
+        assertThat(window.seatPreferences()).containsExactly("WINDOW");
+        assertThat(back.seatPreferences()).containsExactly("BACK");
+    }
+
+    @Test
+    void asks_for_am_or_pm_when_twelve_oclock_is_ambiguous() {
+        var bareTwelve = extractor.extract("내일 12시 버스", base);
+        var noon = extractor.extract("내일 오후 12시 버스", base);
+
+        assertThat(bareTwelve.departureTime()).isNull();
+        assertThat(bareTwelve.ambiguousMeridiem()).isTrue();
+        assertThat(noon.departureTime()).hasToString("12:00");
+        assertThat(noon.ambiguousMeridiem()).isFalse();
+    }
+
+    @Test
+    void extracts_only_the_new_terminal_from_a_correction_sentence() {
+        var result = extractor.extract("아니야, 동서울말고 센트럴로 바꿔줘", base);
+
+        assertThat(result.standaloneTerminal()).isEqualTo("센트럴시티");
+        assertThat(result.departure()).isNull();
+        assertThat(result.arrival()).isNull();
     }
 }

@@ -91,11 +91,11 @@ public class ConversationParseService {
             String sessionArr = sessionValue(session, ConversationSession::getArrival);
 
             // 기존 출발지 도시를 세부화하는 답변인 경우 (예: 출발지가 "서울"인데 "강남" 입력)
-            if (city != null && city.equals(sessionDep)) {
+            if (belongsToCity(sessionDep, city)) {
                 departure = standalone;
             }
             // 기존 도착지 도시를 세부화하는 답변인 경우 (예: 도착지가 "서울"인데 "강남" 입력)
-            else if (city != null && city.equals(sessionArr)) {
+            else if (belongsToCity(sessionArr, city)) {
                 arrival = standalone;
             }
             // 출발지만 있고 도착지가 비어있을 때 단독 입력 -> 도착지로 배정! (예: 부산에서 출발인데 "강남" 입력 -> 도착지: 서울경부)
@@ -106,14 +106,16 @@ public class ConversationParseService {
             else if (sessionArr != null && sessionDep == null) {
                 departure = standalone;
             }
-            // 둘 다 비어있을 때 -> 기본 출발지로 설정
+            // 둘 다 비어있을 때 단독 터미널은 출발지로 둔다.
             else if (departure == null) {
-                arrival = standalone;
+                departure = standalone;
             }
         }
 
         String date = firstNonBlank(rules.date() == null ? null : rules.date().toString(), sessionValue(session, ConversationSession::getDate), value(llm, ConversationParseResponse::date));
-        String departureTime = firstNonBlank(rules.departureTime() == null ? null : rules.departureTime().toString(), sessionValue(session, ConversationSession::getDepartureTime), value(llm, ConversationParseResponse::departureTime));
+        // 오전/오후가 없는 시각은 이전 시각이나 LLM 추측으로 메우지 않고 확인한다.
+        String departureTime = rules.ambiguousMeridiem() ? null
+                : firstNonBlank(rules.departureTime() == null ? null : rules.departureTime().toString(), sessionValue(session, ConversationSession::getDepartureTime), value(llm, ConversationParseResponse::departureTime));
         String timePreference = firstNonBlank(rules.timePreference(), sessionValue(session, ConversationSession::getTimePreference), value(llm, ConversationParseResponse::timePreference), "ANY");
         String servicePreference = firstNonBlank(rules.servicePreference(), sessionValue(session, ConversationSession::getServicePreference), value(llm, ConversationParseResponse::servicePreference), "ANY");
         String busGradePreference = firstNonBlank(rules.busGradePreference(), sessionValue(session, ConversationSession::getBusGradePreference), value(llm, ConversationParseResponse::busGradePreference), "ANY");
@@ -122,20 +124,28 @@ public class ConversationParseService {
                 : session != null && session.getPassengers() > 0 ? session.getPassengers()
                 : llm != null && llm.passengers() > 0 ? llm.passengers() : 1;
 
-        boolean passengerMentioned = hasPassengerMention(rawText) 
-                || (rules.passengers() > 1) 
-                || (llm != null && llm.passengers() > 1) 
-                || (session != null && session.getPassengers() > 1);
+        boolean passengerMentionedThisTurn = hasPassengerMention(rawText) || rules.passengerMentioned();
+        boolean passengerMentioned = passengerMentionedThisTurn
+                || (session != null && session.isPassengerCountConfirmed());
 
-        List<String> seatPreferences = mergePreferences(session == null ? List.of() : session.getSeatPreferences(),
+        String previousPrompt = sessionValue(session, ConversationSession::getClarificationPrompt);
+        boolean seatPreferenceQuestionPending = previousPrompt != null && previousPrompt.contains(SEAT_PREFERENCE_QUESTION_MARKER);
+        boolean noSeatPreferenceThisTurn = seatPreferenceQuestionPending && isNoSeatPreferenceResponse(rawText);
+        boolean seatPreferenceMentionedThisTurn = rules.seatPreferenceMentioned() || noSeatPreferenceThisTurn;
+        boolean seatPreferenceMentioned = seatPreferenceMentionedThisTurn
+                || (session != null && session.isSeatPreferenceConfirmed());
+
+        // "없어요", "아무렇게나"는 선호를 비워 두되, 선호 질문에 답했다는 사실은 확정한다.
+        // 그래야 같은 질문을 반복하지 않고 좌석 추천기는 기본 규칙으로 자리를 고른다.
+        List<String> seatPreferences = noSeatPreferenceThisTurn ? List.of()
+                : mergePreferences(session == null ? List.of() : session.getSeatPreferences(),
                 llm == null ? null : llm.seatPreferences(), rules.seatPreferences(), rules.seatPreferenceMentioned());
         List<String> accessibilityNeeds = mergePreferences(session == null ? List.of() : session.getAccessibilityNeeds(),
                 llm == null ? null : llm.accessibilityNeeds(), rules.accessibilityNeeds(), rules.accessibilityMentioned());
 
-        List<String> missing = missingRequired(departure, arrival, date, departureTime, timePreference, servicePreference);
-        String previousPrompt = sessionValue(session, ConversationSession::getClarificationPrompt);
-        boolean seatPreferenceAlreadyAsked = previousPrompt != null && previousPrompt.contains(SEAT_PREFERENCE_QUESTION_MARKER);
-        String prompt = clarificationPrompt(missing, departure, arrival, passengers, passengerMentioned, seatPreferenceAlreadyAsked);
+        List<String> missing = missingRequired(departure, arrival, date, departureTime);
+        String prompt = clarificationPrompt(missing, departure, arrival, passengers, passengerMentioned,
+                seatPreferenceMentioned, rules.ambiguousMeridiem());
 
         if (prompt != null && !isBlank(rawText) && prompt.equals(previousPrompt)) {
             prompt = "죄송해요, 잘 못 알아들었어요. " + prompt;
@@ -150,14 +160,32 @@ public class ConversationParseService {
         return new ConversationParseResponse(
                 intent, nullIfBlank(departure), nullIfBlank(arrival), nullIfBlank(date),
                 nullIfBlank(departureTime), timePreference, servicePreference, busGradePreference, passengers,
-                seatPreferences, accessibilityNeeds, missing, prompt, wantsEarlierBus, wantsLaterBus
+                passengerMentioned, seatPreferences, seatPreferenceMentioned, accessibilityNeeds,
+                missing, prompt, wantsEarlierBus, wantsLaterBus
         );
+    }
+
+    /**
+     * 세션에는 "부산서부", "서울경부"처럼 구체 터미널이 저장될 수 있다. 단독으로 말한
+     * 터미널의 도시와 비교할 때 문자열을 그대로 비교하면 "노포동"(부산) 같은 변경 요청을
+     * 출발지가 아닌 도착지로 잘못 배정하게 된다.
+     */
+    private boolean belongsToCity(String terminalOrCity, String city) {
+        if (isBlank(terminalOrCity) || isBlank(city)) return false;
+        return city.equals(terminalOrCity) || city.equals(TagoClient.cityOf(terminalOrCity));
     }
 
     private boolean hasPassengerMention(String text) {
         if (text == null || text.isBlank()) return false;
-        return Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|분|식구)").matcher(text).find()
+        return Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|식구|분(?!\\s*(?:뒤|후)))").matcher(text).find()
                 || List.of("혼자", "둘이", "셋이", "넷이", "다섯이", "부부", "데리고", "모시고", "고치", "같이").stream().anyMatch(text::contains);
+    }
+
+    private boolean isNoSeatPreferenceResponse(String text) {
+        if (text == null || text.isBlank()) return false;
+        return List.of("상관없", "아무거나", "아무렇게나", "아무 데나", "아무데나", "아무 자리", "아무자리",
+                "선호 없", "없어요", "없습니다", "없어", "없다", "괜찮", "마음대로", "알아서", "편한 데로", "아니요")
+                .stream().anyMatch(text::contains);
     }
 
     private List<String> mergePreferences(List<String> existing, List<String> llmValues, List<String> ruleValues, boolean explicitlyMentioned) {
@@ -176,15 +204,14 @@ public class ConversationParseService {
         if (values != null) values.stream().filter(v -> v != null && !v.isBlank() && !"null".equalsIgnoreCase(v)).forEach(target::add);
     }
 
-    private List<String> missingRequired(String departure, String arrival, String date, String depTime, String timePref, String servicePref) {
+    private List<String> missingRequired(String departure, String arrival, String date, String depTime) {
         List<String> missing = new ArrayList<>();
         if (isBlank(departure)) missing.add("departure");
         if (isBlank(arrival)) missing.add("arrival");
         if (isBlank(date)) missing.add("date");
-        boolean hasServicePreference = "FIRST".equalsIgnoreCase(servicePref) || "LAST".equalsIgnoreCase(servicePref);
-        if (isBlank(depTime) && (isBlank(timePref) || "ANY".equalsIgnoreCase(timePref)) && !hasServicePreference) {
-            missing.add("timePreference");
-        }
+        // 오전/오후/첫차 같은 범주만으로는 추천 후보가 너무 넓어진다.
+        // 예매 화면으로 넘어가기 전에는 반드시 HH:mm으로 변환 가능한 정확한 시각을 받는다.
+        if (isBlank(depTime)) missing.add("departureTime");
         return missing;
     }
 
@@ -196,7 +223,8 @@ public class ConversationParseService {
 
     private String clarificationPrompt(List<String> missing, String departure, String arrival,
                                        int passengers, boolean passengerMentioned,
-                                       boolean seatPreferenceAlreadyAsked) {
+                                       boolean seatPreferenceMentioned,
+                                       boolean ambiguousMeridiem) {
         // 필수 이동 정보(출발/도착/날짜/시간) 누락 시 질문
         if (!missing.isEmpty()) {
             if (missing.contains("departure") && missing.contains("arrival")) {
@@ -208,14 +236,17 @@ public class ConversationParseService {
             if (missing.contains("arrival")) {
                 return (departure != null && !departure.isBlank() ? departure + "에서 " : "") + "어디로 가시나요?";
             }
-            if (missing.contains("date") && missing.contains("timePreference")) {
-                return "언제 출발하시나요? '내일 아침', '이번 주말 오후'처럼 날짜와 시간대를 편하게 말씀해 주세요.";
+            if (missing.contains("date") && missing.contains("departureTime")) {
+                return "언제, 몇 시에 출발하시나요? '내일 오전 9시', '토요일 오후 3시'처럼 날짜와 정확한 시간을 말씀해 주세요.";
             }
             if (missing.contains("date")) {
                 return "출발하시는 날짜를 말씀해 주세요. '오늘', '내일', '이번 주 토요일'처럼 말씀하셔도 됩니다.";
             }
-            if (missing.contains("timePreference")) {
-                return "몇 시쯤 출발하는 버스를 원하시나요? '오전 9시', '오후 3시', '첫차', '막차'처럼 말씀해 주세요.";
+            if (missing.contains("departureTime")) {
+                if (ambiguousMeridiem) {
+                    return "입력하신 시간이 오전인지 오후인지 확인이 필요해요. '오전 8시', '오후 3시'처럼 오전 또는 오후를 붙여 말씀해 주세요.";
+                }
+                return "오전이나 오후만으로는 정확한 버스를 고르기 어려워요. '오전 9시', '오후 3시'처럼 몇 시에 출발할지 말씀해 주세요.";
             }
         }
 
@@ -237,8 +268,8 @@ public class ConversationParseService {
         // 좌석 자체 선호를 실제로 물어본 적은 없다. seatPrefs/accessNeeds가 비어있는지가 아니라
         // "이 질문을 이미 한 번 했는지"로 판단해야, 추론 때문에 이 질문 자체가 통째로 생략되어
         // "좌석 선호를 안 물어봤다"는 사고가 나지 않는다.
-        if (!seatPreferenceAlreadyAsked) {
-            String countStr = passengers > 1 ? passengers + "분" : "1분";
+        if (!seatPreferenceMentioned) {
+            String countStr = passengers > 1 ? passengers + "명" : "한 명";
             return String.format("네, %s 자리로 알아볼게요. 혹시 다리가 불편하시거나 창가/통로 등 " + SEAT_PREFERENCE_QUESTION_MARKER + "?", countStr);
         }
 

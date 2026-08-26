@@ -72,6 +72,19 @@ class SeatRecommendServiceTest {
     }
 
     @Test
+    @DisplayName("명시한 뒷좌석 선호는 보행 배려의 자동 앞좌석 추천보다 우선한다")
+    void explicit_back_preference_overrides_automatic_front_accessibility_boost() {
+        SeatRecommendService service = serviceWith(List.of(
+                new Seat("1A", 1, 1, "FRONT", "AISLE", true),
+                new Seat("8B", 8, 2, "BACK", "WINDOW", true)
+        ));
+
+        var result = service.recommend(new SeatRecommendRequest("우등", List.of("BACK"), List.of("WALKING_DIFFICULTY"), 1));
+
+        assertThat(result.bestSeat().seatNo()).isEqualTo("8B");
+    }
+
+    @Test
     @DisplayName("3. 멀미(MOTION_SICKNESS) 시 흔들림이 적은 중간 4B 좌석 추천")
     void prioritizes_middle_seat_for_motion_sickness() {
         SeatRecommendService service = serviceWith(List.of(
@@ -117,6 +130,21 @@ class SeatRecommendServiceTest {
     }
 
     @Test
+    @DisplayName("프리미엄 독립 1인석 열은 앞뒤 빈 좌석을 두 분 좌석 후보로 사용한다")
+    void recommends_front_back_pair_for_a_premium_single_seat_column() {
+        SeatRecommendService service = serviceWith(List.of(
+                new Seat("1C", 1, 4, "FRONT", "WINDOW", true),
+                new Seat("2C", 2, 4, "FRONT", "WINDOW", true)
+        ));
+
+        var result = service.recommend(new SeatRecommendRequest("프리미엄", List.of("FRONT"), List.of(), 2));
+
+        assertThat(result.bestSeat().seatNo()).isEqualTo("1C");
+        assertThat(result.alternatives()).extracting(Seat::seatNo).containsExactly("2C");
+        assertThat(result.adjacentPair()).isTrue();
+    }
+
+    @Test
     @DisplayName("6. 뒤쪽 연석이 매진되면 앞쪽이 아니라 뒤쪽에서 가장 가까운 연석을 추천")
     void falls_back_to_the_pair_closest_to_the_requested_section() {
         // 7~9줄(뒤쪽) 연석은 모두 매진, 앞쪽 1줄과 중간 5줄 연석만 남은 상황
@@ -129,7 +157,7 @@ class SeatRecommendServiceTest {
         // 남은 연석은 1줄과 5줄뿐 → 뒤쪽에서 더 가까운 5A, 5B 를 골라야 한다
         assertThat(result.bestSeat().seatNo()).isEqualTo("5A");
         assertThat(result.alternatives()).extracting(Seat::seatNo).containsExactly("5B");
-        assertThat(result.reasons()).anyMatch(r -> r.contains("뒤쪽에는 나란히 앉으실 자리가 없어") && r.contains("5A, 5B"));
+        assertThat(result.reasons()).anyMatch(r -> r.contains("뒤쪽에는 붙어 앉으실 자리가 없어") && r.contains("5A, 5B"));
     }
 
     @Test

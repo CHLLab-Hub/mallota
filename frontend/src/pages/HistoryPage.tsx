@@ -1,3 +1,5 @@
+import { useEffect, useState } from 'react'
+import { cancelBooking, fetchBookings, getBookingOwnerId } from '../api/bookingApi'
 import { useAppState } from '../features/conversation/AppState'
 import { BottomTab } from './BottomTab'
 import './HomePage.css'
@@ -12,11 +14,33 @@ function formatTime(raw: string): string {
 }
 
 export function HistoryPage() {
-  const { bookings, removeBooking } = useAppState()
+  const { bookings, setBookings, removeBooking } = useAppState()
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
 
-  function cancel(id: string) {
-    removeBooking(id)
-    alert('예매가 취소되었습니다.')
+  useEffect(() => {
+    let active = true
+    fetchBookings(getBookingOwnerId())
+      .then((items) => {
+        if (active) setBookings(items)
+      })
+      .catch(() => {
+        if (active) setError('예매 내역을 불러오지 못했습니다.')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => { active = false }
+  }, [setBookings])
+
+  async function cancel(id: string) {
+    try {
+      await cancelBooking(id, getBookingOwnerId())
+      removeBooking(id)
+      alert('예매가 취소되었습니다.')
+    } catch {
+      setError('예매 취소에 실패했습니다. 잠시 후 다시 시도해 주세요.')
+    }
   }
 
   return (
@@ -24,7 +48,11 @@ export function HistoryPage() {
       <h1 className="home-title" style={{ fontSize: '1.5rem' }}>예매 내역</h1>
 
       <div className="home-body">
-        {bookings.length === 0 ? (
+        {loading ? (
+          <p style={{ color: '#58665f' }}>예매 내역을 불러오는 중입니다.</p>
+        ) : error ? (
+          <p style={{ color: '#b45309' }}>{error}</p>
+        ) : bookings.length === 0 ? (
           <p style={{ color: '#58665f' }}>예매 내역이 없습니다.</p>
         ) : (
           bookings.map((b) => (
@@ -45,7 +73,7 @@ export function HistoryPage() {
                 {formatTime(b.bus.departureTime)} 출발 · 좌석 {b.seatNo}
               </div>
               <div style={{ color: '#58665f', marginTop: '4px' }}>
-                {b.bus.grade} · {b.bus.charge.toLocaleString()}원
+                {b.bus.grade} · {b.passengers}명 · 1인 {b.bus.charge.toLocaleString()}원 · <b>총 {b.totalFare.toLocaleString()}원</b>
               </div>
               <button
                 type="button"

@@ -12,7 +12,7 @@ export interface SearchCondition {
   passengers: number
   seatPreferences: SeatPreference[]
   accessibilityNeeds: AccessibilityNeed[]
-  missingFields: Array<'departure' | 'arrival' | 'date'>
+  missingFields: Array<'departure' | 'arrival' | 'date' | 'departureTime'>
 }
 
 export interface BusSchedule {
@@ -28,6 +28,16 @@ export interface BusRecommendation {
   bus: BusSchedule
   reason: string
   label: string
+}
+
+// 백엔드 PostgreSQL에 저장되는 예매 내역 형식
+export interface Booking {
+  id: string
+  bus: BusSchedule
+  seatNo: string
+  passengers: number
+  totalFare: number
+  createdAt: string
 }
 export interface ConversationSearchResult {
   condition: SearchCondition

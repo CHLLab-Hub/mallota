@@ -49,7 +49,9 @@ public class ConversationController {
                     parsed.servicePreference(),
                     parsed.busGradePreference(),
                     parsed.passengers(),
+                    parsed.passengerMentioned(),
                     parsed.seatPreferences(),
+                    parsed.seatPreferenceMentioned(),
                     parsed.accessibilityNeeds(),
                     parsed.clarificationPrompt()
             );

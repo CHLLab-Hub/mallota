@@ -26,20 +26,21 @@ public class SeatRecommendService {
 
         List<String> access = request.accessibilityNeeds() != null ? request.accessibilityNeeds() : List.of();
         List<String> prefs = request.seatPreferences() != null ? request.seatPreferences() : List.of();
+        boolean allowVerticalPair = request.busGrade() != null && request.busGrade().contains("프리미엄");
 
         // 2인 이상 예매 시 ➔ 인원수에 맞는 그룹 배치 우선 탐색 (원하는 위치가 매진이면 설명과 함께 차선책 배정)
         if (passengers >= 2) {
             SeatRecommendation groupRec = switch (passengers) {
-                case 2 -> recommendPair(seats, access, prefs);
+                case 2 -> recommendPair(seats, access, prefs, allowVerticalPair);
                 case 3 -> {
                     SeatRecommendation triple = recommendTriple(seats, access, prefs);
-                    yield triple != null ? triple : recommendPair(seats, access, prefs);
+                    yield triple != null ? triple : recommendPair(seats, access, prefs, allowVerticalPair);
                 }
                 default -> {
                     SeatRecommendation quad = recommendQuad(seats, access, prefs);
                     if (quad != null) yield quad;
                     SeatRecommendation triple = recommendTriple(seats, access, prefs);
-                    yield triple != null ? triple : recommendPair(seats, access, prefs);
+                    yield triple != null ? triple : recommendPair(seats, access, prefs, allowVerticalPair);
                 }
             };
             if (groupRec != null) {
@@ -54,15 +55,23 @@ public class SeatRecommendService {
     // ---- 공통 헬퍼: 선호 구역 판별 ----
 
     private String preferredSection(List<String> access, List<String> prefs) {
-        if (access.contains("WALKING_DIFFICULTY") || access.contains("ELDERLY_CARE") || prefs.contains("FRONT")) {
+        // "뒷좌석으로 해 주세요"처럼 사용자가 위치를 명시했다면, 자동 배려 규칙보다 우선한다.
+        // 그래야 다리 불편 정보가 이미 있더라도 요청한 뒤쪽 자리가 앞쪽으로 바뀌지 않는다.
+        String explicit = explicitSection(prefs);
+        if (!"ANY".equals(explicit)) return explicit;
+        if (access.contains("WALKING_DIFFICULTY") || access.contains("ELDERLY_CARE")) {
             return "FRONT";
         }
-        if (access.contains("MOTION_SICKNESS") || prefs.contains("MIDDLE")) {
+        if (access.contains("MOTION_SICKNESS")) {
             return "MIDDLE";
         }
-        if (prefs.contains("BACK")) {
-            return "BACK";
-        }
+        return "ANY";
+    }
+
+    private String explicitSection(List<String> prefs) {
+        if (prefs.contains("BACK")) return "BACK";
+        if (prefs.contains("MIDDLE")) return "MIDDLE";
+        if (prefs.contains("FRONT")) return "FRONT";
         return "ANY";
     }
 
@@ -87,9 +96,9 @@ public class SeatRecommendService {
     }
 
     /** 2인 연석 탐색 및 친절한 설명 생성 */
-    private SeatRecommendation recommendPair(List<Seat> seats, List<String> access, List<String> prefs) {
-        // 통로를 사이에 두지 않고 실제로 나란히 붙어 있는 빈 좌석 쌍만 후보로 수집
-        List<PairDefinition> pairDefs = findAdjacentPairs(seats);
+    private SeatRecommendation recommendPair(List<Seat> seats, List<String> access, List<String> prefs, boolean allowVerticalPair) {
+        // 같은 줄의 나란한 좌석뿐 아니라, 프리미엄 버스의 1인석처럼 앞뒤로 이어진 빈 좌석도 후보로 수집한다.
+        List<PairDefinition> pairDefs = findAdjacentPairs(seats, allowVerticalPair);
         if (pairDefs.isEmpty()) {
             return null; // 연석이 아예 없을 때만 개별 좌석으로 폴백
         }
@@ -111,6 +120,9 @@ public class SeatRecommendService {
             if (prefs.contains("WINDOW") && p.hasWindow) {
                 score += 3;
             }
+            // 같은 조건이라면 일반적인 "옆자리" 연석을 먼저 보여 주되,
+            // 프리미엄 1인석 열에서 가로 연석이 없으면 앞뒤 좌석도 정상 후보가 된다.
+            if ("HORIZONTAL".equals(p.layout)) score += 1;
 
             availablePairs.add(new PairCandidate(p, score));
         }
@@ -121,20 +133,21 @@ public class SeatRecommendService {
 
         List<String> reasons = new ArrayList<>();
         String combinedNo = bestDef.seat1.seatNo() + ", " + bestDef.seat2.seatNo();
+        String pairDescription = "VERTICAL".equals(bestDef.layout) ? "앞뒤로 이어진" : "나란히 앉으실 수 있는";
 
         // 사용자가 원했던 구역에 연석이 잘 있었던 경우
         if ("ANY".equals(preferredSection) || preferredSection.equals(bestDef.position)) {
             if ("FRONT".equals(bestDef.position)) {
-                reasons.add("승하차가 편한 앞쪽 연석입니다.");
+                reasons.add("승하차가 편한 앞쪽 " + pairDescription + " 두 자리입니다.");
             } else if ("MIDDLE".equals(bestDef.position)) {
-                reasons.add("흔들림이 적어 멀미가 덜한 중간 연석으로 나란히 준비했습니다.");
+                reasons.add("흔들림이 적어 멀미가 덜한 중간 " + pairDescription + " 두 자리입니다.");
             } else {
-                reasons.add("요청하신 뒤쪽에 두 분이 나란히 앉으실 수 있는 연석으로 준비했습니다.");
+                reasons.add("요청하신 뒤쪽에 두 분이 " + pairDescription + " 자리로 준비했습니다.");
             }
         }
         // 사용자가 원했던 구역에 연석이 없어 다른 위치의 연석을 찾은 경우 (친절한 설명!)
         else {
-            reasons.add(String.format("요청하신 %s에는 나란히 앉으실 자리가 없어, 두 분이 함께 가실 수 있도록 %s에서 가장 가까운 %s번 연석으로 준비했습니다.",
+            reasons.add(String.format("요청하신 %s에는 붙어 앉으실 자리가 없어, 두 분이 함께 가실 수 있도록 %s에서 가장 가까운 %s번 자리로 준비했습니다.",
                     preferredSectionKorean, preferredSectionKorean, combinedNo));
         }
 
@@ -238,15 +251,34 @@ public class SeatRecommendService {
     }
 
     /**
-     * 같은 줄에서 통로를 사이에 두지 않고 붙어 있는 빈 좌석 쌍을 모두 찾는다.
+     * 같은 줄의 붙은 좌석과 같은 열의 앞뒤 좌석을 모두 찾는다.
      * 좌석 배치도가 [A][B] | [C] 이므로 B-C는 통로를 사이에 둔 자리라 연석이 아니다.
      */
-    private List<PairDefinition> findAdjacentPairs(List<Seat> seats) {
+    private List<PairDefinition> findAdjacentPairs(List<Seat> seats, boolean allowVerticalPair) {
         List<PairDefinition> pairs = new ArrayList<>();
         for (List<Seat> rowSeats : availableSeatsByRow(seats).values()) {
             for (Seat[] pair : rowPairs(rowSeats)) {
                 boolean hasWindow = "WINDOW".equals(pair[0].side()) || "WINDOW".equals(pair[1].side());
-                pairs.add(new PairDefinition(pair[0], pair[1], pair[0].position(), pair[0].row(), hasWindow));
+                pairs.add(new PairDefinition(pair[0], pair[1], pair[0].position(), pair[0].row(), hasWindow, "HORIZONTAL"));
+            }
+        }
+        if (!allowVerticalPair) return pairs;
+
+        // 프리미엄의 독립 1인석 열처럼 가로로 짝이 없는 경우에도 앞뒤 자리를 함께 추천할 수 있다.
+        Map<Integer, List<Seat>> byColumn = new TreeMap<>();
+        for (Seat seat : seats) {
+            if (seat.available()) byColumn.computeIfAbsent(seat.column(), c -> new ArrayList<>()).add(seat);
+        }
+        for (List<Seat> columnSeats : byColumn.values()) {
+            columnSeats.sort(Comparator.comparingInt(Seat::row));
+            for (int i = 0; i + 1 < columnSeats.size(); i++) {
+                Seat front = columnSeats.get(i);
+                Seat back = columnSeats.get(i + 1);
+                if (back.row() - front.row() != 1) continue;
+                // 서로 다른 구역의 경계에 걸치지 않도록 같은 구역 안에서만 앞뒤 묶음을 만든다.
+                if (!front.position().equals(back.position())) continue;
+                boolean hasWindow = "WINDOW".equals(front.side()) || "WINDOW".equals(back.side());
+                pairs.add(new PairDefinition(front, back, front.position(), front.row(), hasWindow, "VERTICAL"));
             }
         }
         return pairs;
@@ -333,13 +365,16 @@ public class SeatRecommendService {
         List<Seat> bestSeats = new ArrayList<>();
         List<String> bestReasons = new ArrayList<>();
 
+        String explicitSection = explicitSection(prefs);
+        boolean hasExplicitSection = !"ANY".equals(explicitSection);
+
         for (Seat seat : seats) {
             if (!seat.available()) continue;
 
             int score = 0;
             List<String> reasons = new ArrayList<>();
 
-            if (access.contains("WALKING_DIFFICULTY") && seat.position().equals("FRONT")) {
+            if (!hasExplicitSection && access.contains("WALKING_DIFFICULTY") && seat.position().equals("FRONT")) {
                 score += 15;
                 reasons.add("다리가 불편하셔서 승하차 편한 앞쪽 좌석입니다.");
             }
@@ -347,15 +382,16 @@ public class SeatRecommendService {
                 score += 8;
                 reasons.add("이동이 편한 통로 쪽 좌석입니다.");
             }
-            if (access.contains("MOTION_SICKNESS") && seat.position().equals("MIDDLE")) {
+            if (!hasExplicitSection && access.contains("MOTION_SICKNESS") && seat.position().equals("MIDDLE")) {
                 score += 12;
                 reasons.add("멀미가 덜하도록 흔들림이 적은 중간 좌석입니다.");
             }
-            if (access.contains("ELDERLY_CARE") && seat.position().equals("FRONT")) {
+            if (!hasExplicitSection && access.contains("ELDERLY_CARE") && seat.position().equals("FRONT")) {
                 score += 10;
                 reasons.add("승하차가 편한 앞쪽 좌석입니다.");
             }
 
+            if (hasExplicitSection && seat.position().equals(explicitSection)) score += 100;
             if (prefs.contains("FRONT") && seat.position().equals("FRONT")) score += 6;
             if (prefs.contains("MIDDLE") && seat.position().equals("MIDDLE")) {
                 score += 6;
@@ -388,7 +424,7 @@ public class SeatRecommendService {
         return new SeatRecommendation(bestSeat, bestScore, bestReasons, bestSeats.subList(1, bestSeats.size()), false, seats);
     }
 
-    private record PairDefinition(Seat seat1, Seat seat2, String position, int row, boolean hasWindow) {}
+    private record PairDefinition(Seat seat1, Seat seat2, String position, int row, boolean hasWindow, String layout) {}
     private record PairCandidate(PairDefinition def, int score) {}
 
     private record TripleDefinition(Seat seat1, Seat seat2, Seat extra, String position, int row, boolean hasWindow) {}

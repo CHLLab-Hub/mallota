@@ -31,6 +31,12 @@ public class ConversationSession {
     private String busGradePreference;
     @Builder.Default
     private int passengers = 1;
+    /** 사용자가 인원수를 직접 말해 기본값이 아니라는 것이 확인되었는지 */
+    @Builder.Default
+    private boolean passengerCountConfirmed = false;
+    /** 좌석 선호를 직접 말했거나 "상관없음"으로 답했는지 */
+    @Builder.Default
+    private boolean seatPreferenceConfirmed = false;
 
     private String clarificationPrompt;
 
@@ -53,11 +59,14 @@ public class ConversationSession {
         this.accessibilityNeeds = new ArrayList<>();
     }
 
-    /** 필수 조건(출발지, 도착지, 날짜)이 모두 채워졌는지 검사 */
+    /** 필수 조건(출발지, 도착지, 날짜, 정확한 출발 시각)이 모두 채워졌는지 검사 */
     public boolean hasAllRequiredFields() {
         return departure != null && !departure.isBlank()
                 && arrival != null && !arrival.isBlank()
-                && date != null && !date.isBlank();
+                && date != null && !date.isBlank()
+                && departureTime != null && !departureTime.isBlank()
+                && passengerCountConfirmed
+                && seatPreferenceConfirmed;
     }
 
     /** 조건이 바뀌었을 때 확인 상태를 초기화 */
@@ -73,6 +82,16 @@ public class ConversationSession {
                                 String timePreference, String servicePreference, String busGradePreference,
                                 int passengers, List<String> seatPrefs, List<String> accessNeeds,
                                 String clarificationPrompt) {
+        mergeConditions(departure, arrival, date, departureTime, timePreference, servicePreference, busGradePreference,
+                passengers, false, seatPrefs, false, accessNeeds, clarificationPrompt);
+    }
+
+    /** 새로 추출된 조건과, 사용자가 인원/좌석 질문에 답했는지 여부를 함께 누적한다. */
+    public void mergeConditions(String departure, String arrival, String date, String departureTime,
+                                String timePreference, String servicePreference, String busGradePreference,
+                                int passengers, boolean passengerMentioned, List<String> seatPrefs,
+                                boolean seatPreferenceMentioned, List<String> accessNeeds,
+                                String clarificationPrompt) {
         if (departure != null && !departure.isBlank()) this.departure = departure;
         if (arrival != null && !arrival.isBlank()) this.arrival = arrival;
         if (date != null && !date.isBlank()) this.date = date;
@@ -81,6 +100,8 @@ public class ConversationSession {
         if (servicePreference != null && !servicePreference.isBlank()) this.servicePreference = servicePreference;
         if (busGradePreference != null && !busGradePreference.isBlank()) this.busGradePreference = busGradePreference;
         if (passengers > 0) this.passengers = passengers;
+        if (passengerMentioned) this.passengerCountConfirmed = true;
+        if (seatPreferenceMentioned) this.seatPreferenceConfirmed = true;
 
         if (seatPrefs != null) {
             this.seatPreferences = new ArrayList<>(seatPrefs);

@@ -32,11 +32,11 @@ class ConversationControllerIntegrationTest {
                 .andExpect(jsonPath("$.state").value("COLLECTING_CONDITIONS"))
                 .andExpect(jsonPath("$.departure").value("서울"))
                 .andExpect(jsonPath("$.arrival").value("대전"))
-                .andExpect(jsonPath("$.clarificationPrompt").value("언제 출발하시나요? '내일 아침', '이번 주말 오후'처럼 날짜와 시간대를 편하게 말씀해 주세요."));
+                .andExpect(jsonPath("$.clarificationPrompt").value("언제, 몇 시에 출발하시나요? '내일 오전 9시', '토요일 오후 3시'처럼 날짜와 정확한 시간을 말씀해 주세요."));
 
         mockMvc.perform(post("/api/conversation/parse")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"text\":\"내일 오전에 다리가 불편해서 앞쪽 통로로 갈게요\",\"sessionId\":\"" + sessionId + "\"}"))
+                        .content("{\"text\":\"내일 오전 9시에 한 명이고 다리가 불편해서 앞쪽 통로로 갈게요\",\"sessionId\":\"" + sessionId + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.state").value("READY_TO_SEARCH"))
                 .andExpect(jsonPath("$.date").isNotEmpty())

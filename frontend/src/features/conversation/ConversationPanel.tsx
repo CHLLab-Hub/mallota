@@ -38,11 +38,11 @@ export function ConversationPanel() {
         const arr = session.arrival && session.arrival !== 'null' ? session.arrival : null
         const dt = session.date && session.date !== 'null' ? session.date : null
 
-        if (!dep || !arr || !dt) {
+        const departureTime = session.departureTime && session.departureTime !== 'null' ? session.departureTime : null
+        if (!dep || !arr || !dt || !departureTime) {
           // 안전망: 혹시 필수값 없으면 되묻기
-          appSay('출발지, 도착지, 날짜를 말씀해 주세요.')
+          appSay('출발지, 도착지, 날짜와 정확한 출발 시간을 말씀해 주세요.')
         } else {
-          appSay('조건에 맞는 버스를 찾았어요. 추천 버스를 보여드릴게요.')
           // 좌석 선호·접근성·인원 창고에 저장 (좌석 추천에 쓰려고)
           setSeatPreferences(session.seatPreferences ?? [])
           setAccessibilityNeeds(session.accessibilityNeeds ?? [])
@@ -51,7 +51,7 @@ export function ConversationPanel() {
             departure: dep,
             arrival: arr,
             date: dt,
-            departureTime: session.departureTime,
+            departureTime,
             timePreference: session.timePreference,
             servicePreference: session.servicePreference,
             busGradePreference: session.busGradePreference,

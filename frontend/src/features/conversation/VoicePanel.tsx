@@ -5,12 +5,29 @@ import { useAppState } from './AppState'
 import logo from '../../assets/logo.png'
 import './ConversationPanel.css'
 
+// 화면이 바뀌거나 다음 안내가 시작되면 이전 음성과 네트워크 요청까지 멈춘다.
+// 모듈 범위로 두어 Home/Bus/Seat/Confirm 페이지가 서로 달라도 하나의 음성만 재생된다.
+let currentAudio: HTMLAudioElement | null = null
+let currentTtsController: AbortController | null = null
+
+export function stopSpeaking() {
+  currentTtsController?.abort()
+  currentTtsController = null
+  if (currentAudio) {
+    currentAudio.pause()
+    currentAudio.currentTime = 0
+    currentAudio = null
+  }
+}
+
 interface VoicePanelProps {
   onUserSpeak: (text: string) => void | Promise<void>
   loading?: boolean
+  /** 좌석 선택처럼 화면 공간이 중요한 단계에서는 마이크만 표시한다. */
+  compact?: boolean
 }
 
-export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
+export function VoicePanel({ onUserSpeak, loading, compact = false }: VoicePanelProps) {
   const { messages } = useAppState()
   const [text, setText] = useState('')
   const [showInput, setShowInput] = useState(false)
@@ -35,6 +52,8 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
     } else {
       setError(null)
       try {
+        // 사용자가 답하기 시작할 때 이전 안내가 마이크 입력에 섞이지 않게 한다.
+        stopSpeaking()
         await startRecording()
       } catch (e) {
         setError('마이크를 사용할 수 없습니다. 권한을 확인해 주세요.')
@@ -46,13 +65,14 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
     if (!text.trim()) return
     const t = text
     setText('')
+    stopSpeaking()
     await onUserSpeak(t)
   }
 
   return (
     <div>
       <div className="chat-container">
-        {messages.slice(-4).map((m, i) => (
+        {!compact && messages.slice(-2).map((m, i) => (
           <div key={i} className={`chat-row ${m.role}`}>
             {m.role === 'app' && <img src={logo} alt="" className="chat-avatar" />}
             <div className={`chat-bubble ${m.role}`}>{m.text}</div>
@@ -82,11 +102,13 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
           <div className="mic-label">
             {recording ? '녹음 중... (누르면 완료)' : transcribing ? '인식 중...' : loading ? '처리 중...' : '눌러서 말하기'}
           </div>
-          <button type="button" className="mic-sublabel" onClick={() => setShowInput((v) => !v)}>
-            직접 글씨로 입력하기
-          </button>
+          {!compact && (
+            <button type="button" className="mic-sublabel" onClick={() => setShowInput((v) => !v)}>
+              직접 글씨로 입력하기
+            </button>
+          )}
 
-          {showInput && (
+          {!compact && showInput && (
             <div style={{ width: '100%' }}>
               <textarea
                 className="chat-input"
@@ -113,13 +135,22 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
 // 앱이 말하기 (TTS) — 어디서든 쓸 수 있게 export
 export async function speak(t: string) {
   if (!t.trim()) return
+  stopSpeaking()
+  const controller = new AbortController()
+  currentTtsController = controller
   try {
-    const data = await textToSpeech(t)
-    if (data.audio) {
+    const data = await textToSpeech(t, controller.signal)
+    // 늦게 끝난 이전 요청은 이미 새 안내가 시작된 상태이므로 재생하지 않는다.
+    if (data.audio && currentTtsController === controller) {
       const audio = new Audio('data:audio/mp3;base64,' + data.audio)
+      currentAudio = audio
+      audio.onended = () => {
+        if (currentAudio === audio) currentAudio = null
+        if (currentTtsController === controller) currentTtsController = null
+      }
       await audio.play()
     }
   } catch (e) {
-    // 무시
+    // 중단(AbortError)과 TTS 실패는 화면에서 별도 안내하지 않는다.
   }
 }
