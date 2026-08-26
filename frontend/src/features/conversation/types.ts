@@ -24,7 +24,11 @@ export interface BusSchedule {
   arrivalTime: string
   charge: number
 }
-
+export interface BusRecommendation {
+  bus: BusSchedule
+  reason: string
+  label: string
+}
 export interface ConversationSearchResult {
   condition: SearchCondition
   buses: BusSchedule[]

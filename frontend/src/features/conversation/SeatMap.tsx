@@ -112,61 +112,63 @@ export function SeatMap({ seats, recommendedNo, alternativeNos, selectedNo, onSe
     if (!rows.has(seat.row)) rows.set(seat.row, [])
     rows.get(seat.row)!.push(seat)
   }
-  // 줄 번호 순 정렬
   const sortedRows = Array.from(rows.entries()).sort((a, b) => a[0] - b[0])
 
-  // 쉼표로 연결된 "9A, 9B" 연석 번호는 두 자리 모두 칠해야 한다
+  // 전체 격자의 열 수 (제일 큰 column 값) — 줄마다 실제 좌석이 없는 칸(통로)은 빈 칸으로 채운다
+  const totalCols = Math.max(...seats.map((s) => s.column))
+
+  // 쉼표로 연결된 "9A, 9B" 연석 번호는 모든 자리를 다 칠해야 한다 (2/3/4인 그룹 배정 지원)
   const selectedList = splitSeatNos(selectedNo)
   const recommendedList = splitSeatNos(recommendedNo)
 
   function seatColor(seat: Seat): string {
-    if (!seat.available) return '#cbd5e1'                    // 예약됨 = 회색
-    if (selectedList.includes(seat.seatNo)) return '#2563eb' // 내가 고른 = 파랑
+    if (!seat.available) return '#cbd5e1'                       // 예약됨 = 회색
+    if (selectedList.includes(seat.seatNo)) return '#2563eb'    // 내가 고른 = 파랑
     if (recommendedList.includes(seat.seatNo)) return '#16a34a' // 추천 = 초록
     if (alternativeNos.includes(seat.seatNo)) return '#86efac'  // 동률 대안 = 연초록
-    return '#dcdcdc'                                    // 빈 자리 = 밝은 회색
+    return '#f1f5f9'                                            // 빈 자리 = 밝은 회색
   }
 
   return (
     <div style={{ marginTop: '20px' }}>
       <h3>좌석 배치도</h3>
-
-      {/* 운전석 표시 */}
       <div style={{ textAlign: 'right', marginBottom: '8px', color: '#64748b' }}>🚍 앞 (운전석)</div>
 
       <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center' }}>
         {sortedRows.map(([rowNum, rowSeats]) => {
-          const sorted = [...rowSeats].sort((a, b) => a.column - b.column)
-          const totalCols = Math.max(...sorted.map((s) => s.column))
+          // column 위치로 좌석 찾기 (없으면 빈 칸 = 통로)
+          const byColumn = new Map<number, Seat>()
+          for (const s of rowSeats) byColumn.set(s.column, s)
+
           return (
             <div key={rowNum} style={{ display: 'flex', gap: '6px', alignItems: 'center' }}>
-              {sorted.map((seat) => {
-                // 통로 표현: 2번 칸 뒤에 간격 ([A][B] | [C])
-                const showAisle = seat.column === AISLE_AFTER_COLUMN && seat.column < totalCols
-                const highlighted =
-                  recommendedList.includes(seat.seatNo) || selectedList.includes(seat.seatNo)
+              {Array.from({ length: totalCols }, (_, i) => i + 1).map((colPos) => {
+                const seat = byColumn.get(colPos)
+                if (!seat) {
+                  // 빈 칸 (통로) — 좌석 자리만큼 공간 차지
+                  return <div key={colPos} style={{ width: '44px', height: '44px' }} />
+                }
+                const highlighted = recommendedList.includes(seat.seatNo) || selectedList.includes(seat.seatNo)
                 return (
-                  <div key={seat.seatNo} style={{ display: 'flex', alignItems: 'center' }}>
-                    <button
-                      type="button"
-                      onClick={() => onSelect?.(seat)}
-                      disabled={!seat.available}
-                      style={{
-                        width: '44px',
-                        height: '44px',
-                        borderRadius: '8px',
-                        border: '1px solid #94a3b8',
-                        background: seatColor(seat),
-                        color: seat.available ? '#0f172a' : '#94a3b8',
-                        fontSize: '0.8rem',
-                        fontWeight: highlighted ? 'bold' : 'normal',
-                        cursor: seat.available && onSelect ? 'pointer' : 'default',
-                      }}
-                    >
-                      {seat.seatNo}
-                    </button>
-                    {showAisle && <div style={{ width: '24px' }} />}
-                  </div>
+                  <button
+                    key={seat.seatNo}
+                    type="button"
+                    onClick={() => onSelect?.(seat)}
+                    disabled={!seat.available}
+                    style={{
+                      width: '44px',
+                      height: '44px',
+                      borderRadius: '8px',
+                      border: '1px solid #94a3b8',
+                      background: seatColor(seat),
+                      color: seat.available ? '#0f172a' : '#94a3b8',
+                      fontSize: '0.8rem',
+                      fontWeight: highlighted ? 'bold' : 'normal',
+                      cursor: seat.available && onSelect ? 'pointer' : 'default',
+                    }}
+                  >
+                    {seat.seatNo}
+                  </button>
                 )
               })}
             </div>
@@ -174,7 +176,6 @@ export function SeatMap({ seats, recommendedNo, alternativeNos, selectedNo, onSe
         })}
       </div>
 
-      {/* 색상 설명 */}
       <div style={{ marginTop: '16px', fontSize: '0.9rem', display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
         <LegendItem color="#16a34a" label="추천 좌석" />
         {selectedList.length > 0 && <LegendItem color="#2563eb" label="선택한 좌석" />}
@@ -186,7 +187,6 @@ export function SeatMap({ seats, recommendedNo, alternativeNos, selectedNo, onSe
   )
 }
 
-// 범례 한 칸 (색 네모 + 설명)
 function LegendItem({ color, label, border }: { color: string; label: string; border?: boolean }) {
   return (
     <span style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>

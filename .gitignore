@@ -18,6 +18,8 @@ backend/target/
 
 # AI
 .venv/
+__pycache__/
+*.pyc
 
 # Editors and operating systems
 .idea/
