@@ -1,0 +1,102 @@
+import { useEffect, useState } from 'react'
+import { cancelBooking, fetchBookings, getBookingOwnerId } from '../api/bookingApi'
+import { useAppState } from '../features/conversation/AppState'
+import { BottomTab } from './BottomTab'
+import './HomePage.css'
+
+function formatTime(raw: string): string {
+  if (!raw || raw.length < 12) return raw
+  const hour = parseInt(raw.substring(8, 10), 10)
+  const minute = raw.substring(10, 12)
+  const period = hour < 12 ? '오전' : '오후'
+  const h = hour === 0 ? 12 : hour > 12 ? hour - 12 : hour
+  return `${period} ${h}:${minute}`
+}
+
+export function HistoryPage() {
+  const { bookings, setBookings, removeBooking } = useAppState()
+  const [loading, setLoading] = useState(true)
+  const [error, setError] = useState<string | null>(null)
+
+  useEffect(() => {
+    let active = true
+    fetchBookings(getBookingOwnerId())
+      .then((items) => {
+        if (active) setBookings(items)
+      })
+      .catch(() => {
+        if (active) setError('예매 내역을 불러오지 못했습니다.')
+      })
+      .finally(() => {
+        if (active) setLoading(false)
+      })
+    return () => { active = false }
+  }, [setBookings])
+
+  async function cancel(id: string) {
+    try {
+      await cancelBooking(id, getBookingOwnerId())
+      removeBooking(id)
+      alert('예매가 취소되었습니다.')
+    } catch {
+      setError('예매 취소에 실패했습니다. 잠시 후 다시 시도해 주세요.')
+    }
+  }
+
+  return (
+    <div className="phone-frame">
+      <h1 className="home-title" style={{ fontSize: '1.5rem' }}>예매 내역</h1>
+
+      <div className="home-body">
+        {loading ? (
+          <p style={{ color: '#58665f' }}>예매 내역을 불러오는 중입니다.</p>
+        ) : error ? (
+          <p style={{ color: '#b45309' }}>{error}</p>
+        ) : bookings.length === 0 ? (
+          <p style={{ color: '#58665f' }}>예매 내역이 없습니다.</p>
+        ) : (
+          bookings.map((b) => (
+            <div
+              key={b.id}
+              style={{
+                border: '2px solid #f0e6d8',
+                borderRadius: '16px',
+                padding: '18px',
+                marginBottom: '12px',
+                background: '#fff',
+              }}
+            >
+              <div style={{ fontSize: '1.2rem', fontWeight: 800 }}>
+                {b.bus.departure} → {b.bus.arrival}
+              </div>
+              <div style={{ color: '#f07f21', marginTop: '4px' }}>
+                {formatTime(b.bus.departureTime)} 출발 · 좌석 {b.seatNo}
+              </div>
+              <div style={{ color: '#58665f', marginTop: '4px' }}>
+                {b.bus.grade} · {b.passengers}명 · 1인 {b.bus.charge.toLocaleString()}원 · <b>총 {b.totalFare.toLocaleString()}원</b>
+              </div>
+              <button
+                type="button"
+                onClick={() => cancel(b.id)}
+                style={{
+                  marginTop: '12px',
+                  padding: '8px 16px',
+                  border: '1px solid #e23b3b',
+                  borderRadius: '10px',
+                  background: '#fff',
+                  color: '#e23b3b',
+                  fontWeight: 700,
+                  cursor: 'pointer',
+                }}
+              >
+                예매 취소
+              </button>
+            </div>
+          ))
+        )}
+      </div>
+
+      <BottomTab />
+    </div>
+  )
+}

@@ -3,9 +3,11 @@ package com.malrota.recommendation;
 import java.util.List;
 
 public record SeatRecommendation(
-        Seat bestSeat,              // 대표 추천 좌석 (동률이면 앞줄·왼쪽 우선)
-        int score,                  // 점수
-        List<String> reasons,       // 추천 이유
-        List<Seat> alternatives     // 같은 점수의 다른 좌석들 (UI에서 함께 표시)
+        Seat bestSeat,
+        int score,
+        List<String> reasons,
+        List<Seat> alternatives,
+        boolean adjacentPair,    // alternatives가 bestSeat과 함께 배정된 그룹 좌석인지 (2/3/4인 배치, 동률 대안이 아님)
+        List<Seat> allSeats      // 전체 좌석 (배치도용)
 ) {
 }

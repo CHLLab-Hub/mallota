@@ -12,7 +12,7 @@ export interface SearchCondition {
   passengers: number
   seatPreferences: SeatPreference[]
   accessibilityNeeds: AccessibilityNeed[]
-  missingFields: Array<'departure' | 'arrival' | 'date'>
+  missingFields: Array<'departure' | 'arrival' | 'date' | 'departureTime'>
 }
 
 export interface BusSchedule {
@@ -24,7 +24,21 @@ export interface BusSchedule {
   arrivalTime: string
   charge: number
 }
+export interface BusRecommendation {
+  bus: BusSchedule
+  reason: string
+  label: string
+}
 
+// 백엔드 PostgreSQL에 저장되는 예매 내역 형식
+export interface Booking {
+  id: string
+  bus: BusSchedule
+  seatNo: string
+  passengers: number
+  totalFare: number
+  createdAt: string
+}
 export interface ConversationSearchResult {
   condition: SearchCondition
   buses: BusSchedule[]
@@ -33,6 +47,8 @@ export interface ConversationSearchResult {
 
 export interface Seat {
   seatNo: string
+  row: number
+  column: number
   position: string
   side: string
   available: boolean
@@ -43,4 +59,37 @@ export interface SeatRecommendation {
   score: number
   reasons: string[]
   alternatives: Seat[]
+  adjacentPair: boolean   // alternatives가 bestSeat과 나란히 붙은 연석인지
+  allSeats: Seat[]
+}
+
+export type ConversationStateValue =
+  | 'COLLECTING_CONDITIONS'
+  | 'READY_TO_SEARCH'
+  | 'BUS_SELECTED'
+  | 'SEAT_RECOMMENDED'
+  | 'AWAITING_CONFIRMATION'
+  | 'BOOKED'
+
+export interface ConversationSessionResult {
+  sessionId: string
+  state: ConversationStateValue
+  departure: string | null
+  arrival: string | null
+  date: string | null
+  departureTime: string | null
+  timePreference: string | null
+  servicePreference: string | null
+  busGradePreference: string | null
+  passengers: number
+  clarificationPrompt: string | null
+  seatPreferences: SeatPreference[]
+  accessibilityNeeds: AccessibilityNeed[]
+  selectedBusId: string | null
+  recommendedSeatNo: string | null
+  bookingId: string | null
+  // 세션에 계속 남는 값이 아니라 "이번 발화"에 한해서만 오는 1회성 신호
+  // (예: "더 빠른/더 늦은 거 없어?" → 방금 보여준 버스보다 이르거나 늦은 시간을 찾아달라는 요청)
+  wantsEarlierBus: boolean
+  wantsLaterBus: boolean
 }

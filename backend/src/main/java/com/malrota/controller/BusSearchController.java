@@ -1,5 +1,6 @@
 package com.malrota.controller;
 
+import com.malrota.dto.response.BusRecommendation;
 import com.malrota.dto.request.BusSearchRequest;
 import com.malrota.dto.response.BusSchedule;
 import com.malrota.service.BusSearchService;
@@ -24,5 +25,10 @@ public class BusSearchController {
     @PostMapping("/search")
     public List<BusSchedule> search(@Valid @RequestBody BusSearchRequest request) {
         return busSearchService.search(request);
+    }
+
+    @PostMapping("/recommend")
+    public List<BusRecommendation> recommend(@Valid @RequestBody BusSearchRequest request) {
+        return busSearchService.recommend(request);
     }
 }

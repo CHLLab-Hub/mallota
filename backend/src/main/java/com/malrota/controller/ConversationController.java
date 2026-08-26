@@ -35,26 +35,37 @@ public class ConversationController {
      */
     @PostMapping("/parse")
     public ConversationSessionResponse parse(@Valid @RequestBody ConversationParseRequest request) {
+        // 세션을 조회하거나 생성하여 넘겨줌 -> 이전 턴의 인원(2명), 조건 영구 유지!
         ConversationSession session = sessionService.getOrCreate(request.sessionId());
 
-        ConversationParseResponse parsed = parseService.parse(request);
+        ConversationParseResponse parsed = parseService.parse(request, session);
         if (parsed != null) {
             session.mergeConditions(
                     parsed.departure(),
                     parsed.arrival(),
                     parsed.date(),
+                    parsed.departureTime(),
                     parsed.timePreference(),
+                    parsed.servicePreference(),
+                    parsed.busGradePreference(),
+                    parsed.passengers(),
+                    parsed.passengerMentioned(),
                     parsed.seatPreferences(),
-                    parsed.accessibilityNeeds()
+                    parsed.seatPreferenceMentioned(),
+                    parsed.accessibilityNeeds(),
+                    parsed.clarificationPrompt()
             );
         }
 
         sessionService.refreshAfterParse(session);
-        return ConversationSessionResponse.from(session);
+        // wantsEarlierBus/wantsLaterBus는 세션에 저장하지 않는 1회성 신호라 이번 응답에만 실어 보낸다.
+        boolean wantsEarlierBus = parsed != null && parsed.wantsEarlierBus();
+        boolean wantsLaterBus = parsed != null && parsed.wantsLaterBus();
+        return ConversationSessionResponse.from(session, wantsEarlierBus, wantsLaterBus);
     }
 
     /**
-     * 고속버스 운행 검색
+     * 고속버스 운행 검색 (세션 조건 연동)
      */
     @PostMapping("/search")
     public ConversationSearchResponse search(@Valid @RequestBody ConversationParseRequest request) {

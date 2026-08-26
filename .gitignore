@@ -2,17 +2,25 @@
 .env
 .env.*
 !.env.example
+!**/.env.example
 **/application-local.yml
 
 # Frontend
 frontend/node_modules/
 frontend/build/
+frontend/build-*/
 frontend/coverage/
 
 # Backend
 backend/.gradle/
 backend/build/
+backend/build-*/
 backend/target/
+
+# AI
+.venv/
+__pycache__/
+*.pyc
 
 # Editors and operating systems
 .idea/
