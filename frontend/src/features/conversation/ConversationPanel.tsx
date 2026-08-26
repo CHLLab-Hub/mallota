@@ -62,7 +62,6 @@ type Stage = 'chat' | 'payment' | 'ticket'
 export function ConversationPanel() {
   const [text, setText] = useState('')
   const [sessionId, setSessionId] = useState<string | null>(null)
-  const [session, setSession] = useState<ConversationSessionResult | null>(null)
   const [message, setMessage] = useState("어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.")
   const [loading, setLoading] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
@@ -147,7 +146,6 @@ export function ConversationPanel() {
     try {
       const session: ConversationSessionResult = await parseConversation(text, sessionId)
       setSessionId(session.sessionId)
-      setSession(session)
       setText('')
 
       // 백엔드가 보낸 질문(누락 질문 또는 약자/좌석 배려 질문)이 있으면 우선 질문하고 대기!
@@ -229,7 +227,6 @@ export function ConversationPanel() {
     setSelecting(false)
     setSeatHint(null)
     setSessionId(null)
-    setSession(null)
     setMessage("어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.")
   }
 
