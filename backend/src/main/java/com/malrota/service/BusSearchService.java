@@ -21,22 +21,22 @@ public class BusSearchService {
     }
 
     public List<BusSchedule> search(BusSearchRequest request) {
-        // 1. 필수값(출발지, 도착지, 날짜) null 체크 방어 (14시 버스 에러 방지)
+        // 필수값(출발지, 도착지, 날짜) null 체크 방어 (14시 버스 에러 방지)
         if (request == null || !hasText(request.departure()) || !hasText(request.arrival()) || !hasText(request.date())) {
             return List.of();
         }
 
-        // 2. 출발지·도착지 이름 → 터미널ID 변환
+        // 출발지·도착지 이름 → 터미널ID 변환
         String depId = tagoClient.findTerminalId(request.departure());
         String arrId = tagoClient.findTerminalId(request.arrival());
         if (depId == null || arrId == null) {
             return List.of();
         }
 
-        // 3. 날짜 포맷 변환 (2026-08-24 → 20260824)
+        // 날짜 포맷 변환 (2026-08-24 → 20260824)
         String date = request.date().replace("-", "");
 
-        // 4. 운행편 조회 후 등급 필터링 및 시간 조건 정렬
+        // 운행편 조회 후 등급 필터링 및 시간 조건 정렬
         List<BusSchedule> schedules = tagoClient.searchBuses(depId, arrId, date);
         return schedules.stream()
                 .filter(schedule -> matchesGrade(schedule, request.busGradePreference()))

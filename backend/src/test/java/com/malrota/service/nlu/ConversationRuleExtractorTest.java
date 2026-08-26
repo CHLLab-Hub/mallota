@@ -115,4 +115,22 @@ class ConversationRuleExtractorTest {
         assertThat(result.arrival()).isNull();
         assertThat(result.seatPreferences()).containsExactly("AISLE");
     }
+
+    @Test
+    void does_not_mistake_five_or_six_oclock_for_passenger_count() {
+        // "여섯"/"다섯"을 단독으로도 인원수로 인식하던 예전 로직이 "여섯시"/"다섯시"(시각)에도
+        // 걸려서, 시간만 말했을 뿐인데 인원이 5명/6명으로 잘못 잡히는 사고가 있었다.
+        var six = extractor.extract("다음주 화요일 저녁 여섯시", base);
+        assertThat(six.departureTime()).hasToString("18:00");
+        assertThat(six.passengers()).isZero();
+
+        var five = extractor.extract("다음주 화요일 저녁 다섯시", base);
+        assertThat(five.departureTime()).hasToString("17:00");
+        assertThat(five.passengers()).isZero();
+
+        // 진짜 인원 표현은 여전히 잡혀야 한다
+        assertThat(extractor.extract("여섯이 갈게요", base).passengers()).isEqualTo(6);
+        assertThat(extractor.extract("여섯 명이요", base).passengers()).isEqualTo(6);
+        assertThat(extractor.extract("다섯 명 예매할게요", base).passengers()).isEqualTo(5);
+    }
 }

@@ -24,11 +24,7 @@ public class ConversationRuleExtractor {
 
     private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(?:출발(?:지)?[:\\s]*)?(" + TERMINALS + ")\\s*(?:에서|서|발)");
     private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))");
-    // "서"/"발"은 지명에 곧바로 붙는 축약 조사라 사이에 공백이 있으면 안 됨(그렇지 않으면 "오전 서울에서"의
-    // "오전"이 "서울"의 "서"를 조사로 잘못 삼켜버림). "(?<!에)서"는 "에서"의 "서"만 따로 매치되는 것도 방지.
     private static final Pattern GENERIC_DEP_PATTERN = Pattern.compile("([가-힣]{2,})(?:\\s*에서|(?<!에)서|발)(?![가-힣])");
-    // "서울", "대전"처럼 등록되지 않은 도시명 자체는 TERMINALS 목록에 없어 ARRIVAL_PATTERN이 못 잡으므로,
-    // "행"뿐 아니라 ARRIVAL_PATTERN과 같은 동사 어미("가는데", "가고" 등)도 함께 허용한다.
     private static final Pattern GENERIC_ARR_PATTERN = Pattern.compile(
             "([가-힣]{2,})\\s*(?:행|(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))(?![가-힣])");
 
@@ -43,9 +39,7 @@ public class ConversationRuleExtractor {
     private static final Pattern NEXT_WEEKDAY_PATTERN = Pattern.compile("다음\\s*주\\s*([월화수목금토일])(?:요일)?");
     private static final Pattern WEEKDAY_PATTERN = Pattern.compile("(?:돌아오는|다가오는)?\\s*([월화수목금토일])요일");
     
-    // 시각의 시(hour)는 "8시"처럼 숫자로도, "여덟 시"/"한 시"처럼 순우리말 수사로도 말할 수 있다.
-    // 알파벳 순이 아니라 "열두/열한"을 "열"보다 먼저 두어, 짧은 대안이 먼저 매치되어 뒤의 "한/두"를
-    // 못 보고 "시" 앞에서 실패하는 일이 없게 한다 (역추적으로 결국은 맞게 잡히지만 순서를 명확히 함).
+    // 시각의 시(hour)는 "8시"처럼 숫자로도, "여덟 시"/"한 시"처럼 순우리말 수사로도 말함
     private static final Pattern TIME_PATTERN = Pattern.compile(
             "(새벽|아침|낮|점심|저녁|밤|심야|오전|오후)?\\s*(\\d{1,2}|열두|열한|다섯|여섯|일곱|여덟|아홉|한|두|세|네|열)\\s*시\\s*(?:(\\d{1,2})\\s*분|반)?");
     private static final Pattern PASSENGER_PATTERN = Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|분|식구)");
@@ -53,11 +47,8 @@ public class ConversationRuleExtractor {
     public RuleParse extract(String text, LocalDateTime baseDateTime) {
         String input = text == null ? "" : text.trim();
 
-        // 발화 전체가 등록된 터미널명/별칭 그 자체와 완전히 일치하는 경우("부산서부" 등 반문에 대한 단답)를
-        // 최우선으로 식별한다. TERMINALS 정규식은 "부산서부" 같은 긴 터미널명이 뒤에 아무 조사도 없이
-        // 단독으로 오면 매칭에 실패하고, 그 안에 포함된 짧은 터미널명("부산")과 우연히 남은 글자("서")를
-        // 조사로 잘못 묶어 엉뚱한 출발/도착지로 오인식하는 문제가 있었다. 완전 일치를 먼저 확인해
-        // 이 오인식을 원천 차단하고, 방향 배정은 세션 문맥을 아는 ConversationParseService에 맡긴다.
+        // 발화 전체가 등록된 터미널명/별칭 그 자체와 완전히 일치하는 경우("부산서부" 등 반문에 대한 단답)를 최우선으로 식별한다.
+        // 완전 일치를 먼저 확인해 이 오인식을 원천 차단하고, 방향 배정은 세션 문맥을 아는 ConversationParseService에 맡긴다.
         String wholeInputAsTerminal = findStandaloneTerminal(input);
         boolean isStandaloneTerminalToken = wholeInputAsTerminal != null
                 && TagoClient.allNamesAndAliases().contains(input.replaceAll("\\s+", ""));
@@ -81,7 +72,7 @@ public class ConversationRuleExtractor {
                 if (genericDeparture != null && isPlausibleTerminal(genericDeparture)) departure = genericDeparture;
             }
 
-            // 단독 단어 입력(조사 없는 "강남", "사상")은 특정 방향으로 단정짓지 않고 식별만 수행!
+            // 단독 단어 입력(조사 없는 "강남", "사상")은 특정 방향으로 단정짓지 않고 식별만 수행
             if (departure == null && arrival == null && input.length() <= 10) {
                 standalone = findStandaloneTerminal(input);
             }
@@ -153,14 +144,6 @@ public class ConversationRuleExtractor {
         return canon != null ? canon : raw;
     }
 
-    /**
-     * GENERIC_DEP_PATTERN/GENERIC_ARR_PATTERN은 "대구", "대전"처럼 별칭으로 등록되지 않은 지명까지
-     * 넓게 잡으려고 조사(에서/서/발/행)만 보고 판단한다. 문제는 "-아서/-어서/-해서"(이유를 나타내는
-     * 연결어미, 예: "싫어서", "불편해서")도 표면적으로 똑같이 "~서"로 끝나서, "햇빛이 싫어서"의 "싫어"를
-     * 지명으로 오인해 기존 출발지를 엉뚱한 값으로 덮어써 버리는 사고가 있었다. TERMINALS 정규식으로
-     * 직접 매칭된 경우(DEPARTURE_PATTERN/ARRIVAL_PATTERN)는 애초에 등록된 이름이라 항상 신뢰할 수
-     * 있지만, 이 조사 기반 fallback은 실제 도시/터미널과 조금이라도 연관되는지 다시 확인해야 한다.
-     */
     private boolean isPlausibleTerminal(String candidate) {
         return TagoClient.isMultiTerminalCity(candidate) || TagoClient.resolveCanonicalName(candidate) != null;
     }
@@ -308,8 +291,8 @@ public class ConversationRuleExtractor {
             } catch (Exception ignored) {}
         }
 
-        if (List.of("여섯", "여섯이", "여섯 명", "여섯 장").stream().anyMatch(text::contains)) return 6;
-        if (List.of("다섯", "다섯이", "다섯 명", "다섯 장").stream().anyMatch(text::contains)) return 5;
+        if (List.of("여섯이", "여섯 명", "여섯 장").stream().anyMatch(text::contains)) return 6;
+        if (List.of("다섯이", "다섯 명", "다섯 장").stream().anyMatch(text::contains)) return 5;
         if (List.of("네 명", "넷이서", "넷이", "네 장", "네 식구").stream().anyMatch(text::contains)) return 4;
         if (List.of("세 명", "셋이서", "셋이", "세 장", "세 식구").stream().anyMatch(text::contains)) return 3;
         if (List.of("두 명", "둘이서", "둘이", "두 장", "두 식구", "부부").stream().anyMatch(text::contains)) return 2;
@@ -364,7 +347,8 @@ public class ConversationRuleExtractor {
     }
 
     private String servicePreference(String text) {
-        if (List.of("첫차", "시방", "싸게싸게", "젤 빠른", "일찍이").stream().anyMatch(text::contains)) return "FIRST";
+        // "저차", "쳐차"는 음성 인식이 "첫차"를 잘못 받아적은 흔한 오인식 표기다 (실제 사용자 보고 사례).
+        if (List.of("첫차", "저차", "쳐차", "시방", "싸게싸게", "젤 빠른", "일찍이").stream().anyMatch(text::contains)) return "FIRST";
         if (text.contains("막차")) return "LAST";
         return null;
     }
