@@ -92,6 +92,20 @@ class ConversationRuleExtractorTest {
     }
 
     @Test
+    void resolves_native_korean_number_words_for_the_hour() {
+        // "한 시"처럼 숫자가 아니라 순우리말 수사로 시각을 말하면 캐치하지 못하던 문제.
+        var oneClock = extractor.extract("다음주 수요일 오후 한 시", base);
+        assertThat(oneClock.departureTime()).hasToString("13:00");
+        assertThat(oneClock.timePreference()).isEqualTo("AFTERNOON");
+
+        var eightClock = extractor.extract("내일 오전 여덟 시 버스로 주세요", base);
+        assertThat(eightClock.departureTime()).hasToString("08:00");
+
+        var elevenClock = extractor.extract("밤 열한 시에 출발할게요", base);
+        assertThat(elevenClock.departureTime()).hasToString("23:00");
+    }
+
+    @Test
     void does_not_mistake_a_reason_clause_ending_in_seo_for_a_place_name() {
         // "-아서/-어서"는 이유를 나타내는 연결어미인데, GENERIC_DEP_PATTERN이 조사 "-서"와 표면적으로
         // 똑같이 생겨서 "싫어"를 지명으로 오인하던 버그가 있었다 (기존 출발지를 엉뚱하게 덮어씀).

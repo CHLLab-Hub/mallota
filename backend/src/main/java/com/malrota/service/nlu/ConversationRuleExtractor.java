@@ -43,7 +43,11 @@ public class ConversationRuleExtractor {
     private static final Pattern NEXT_WEEKDAY_PATTERN = Pattern.compile("다음\\s*주\\s*([월화수목금토일])(?:요일)?");
     private static final Pattern WEEKDAY_PATTERN = Pattern.compile("(?:돌아오는|다가오는)?\\s*([월화수목금토일])요일");
     
-    private static final Pattern TIME_PATTERN = Pattern.compile("(새벽|아침|낮|점심|저녁|밤|심야|오전|오후)?\\s*(\\d{1,2})\\s*시\\s*(?:(\\d{1,2})\\s*분|반)?");
+    // 시각의 시(hour)는 "8시"처럼 숫자로도, "여덟 시"/"한 시"처럼 순우리말 수사로도 말할 수 있다.
+    // 알파벳 순이 아니라 "열두/열한"을 "열"보다 먼저 두어, 짧은 대안이 먼저 매치되어 뒤의 "한/두"를
+    // 못 보고 "시" 앞에서 실패하는 일이 없게 한다 (역추적으로 결국은 맞게 잡히지만 순서를 명확히 함).
+    private static final Pattern TIME_PATTERN = Pattern.compile(
+            "(새벽|아침|낮|점심|저녁|밤|심야|오전|오후)?\\s*(\\d{1,2}|열두|열한|다섯|여섯|일곱|여덟|아홉|한|두|세|네|열)\\s*시\\s*(?:(\\d{1,2})\\s*분|반)?");
     private static final Pattern PASSENGER_PATTERN = Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|분|식구)");
 
     public RuleParse extract(String text, LocalDateTime baseDateTime) {
@@ -205,7 +209,7 @@ public class ConversationRuleExtractor {
         Matcher timeMatcher = TIME_PATTERN.matcher(text);
         while (timeMatcher.find()) {
             String ampm = timeMatcher.group(1);
-            int hour = Integer.parseInt(timeMatcher.group(2));
+            int hour = koreanHourToNumber(timeMatcher.group(2));
             int minute = text.contains("반") ? 30 : (timeMatcher.group(3) != null ? Integer.parseInt(timeMatcher.group(3)) : 0);
 
             // ampm은 "8시"처럼 오전/오후 표현 없이 시각만 말한 경우 null일 수 있다 (List.of(...).contains(null)은
@@ -218,6 +222,25 @@ public class ConversationRuleExtractor {
         }
 
         return new DateTimeResolution(date, time);
+    }
+
+    /** "여덟 시"처럼 순우리말 수사로 말한 시각을 숫자로 변환 (이미 숫자면 그대로 파싱) */
+    private int koreanHourToNumber(String value) {
+        return switch (value) {
+            case "한" -> 1;
+            case "두" -> 2;
+            case "세" -> 3;
+            case "네" -> 4;
+            case "다섯" -> 5;
+            case "여섯" -> 6;
+            case "일곱" -> 7;
+            case "여덟" -> 8;
+            case "아홉" -> 9;
+            case "열" -> 10;
+            case "열한" -> 11;
+            case "열두" -> 12;
+            default -> Integer.parseInt(value);
+        };
     }
 
     private LocalDate resolveWeekdayOrRelativeDay(String text, LocalDateTime base, LocalDate current) {
