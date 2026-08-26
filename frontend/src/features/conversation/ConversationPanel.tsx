@@ -57,6 +57,31 @@ function formatDateTime(raw: string): string {
   return date ? `${date} ${formatTime(raw)}` : formatTime(raw)
 }
 
+// 방금 보여준 버스(current)보다 출발 시각이 이른 버스 중, 가장 가까운(=가장 늦은) 것을 고른다.
+// departureTime은 "yyyyMMddHHmm" 형식이라 같은 날짜끼리는 문자열 비교로 시간 순서를 알 수 있다.
+function findEarlierBus(buses: BusSchedule[], current: BusSchedule): BusSchedule | null {
+  const earlierCandidates = buses.filter((b) => b.departureTime < current.departureTime)
+  if (earlierCandidates.length === 0) return null
+  return earlierCandidates.reduce((latest, b) => (b.departureTime > latest.departureTime ? b : latest))
+}
+
+// findEarlierBus의 대칭: 방금 보여준 버스보다 출발 시각이 늦은 버스 중 가장 가까운(=가장 이른) 것을 고른다.
+function findLaterBus(buses: BusSchedule[], current: BusSchedule): BusSchedule | null {
+  const laterCandidates = buses.filter((b) => b.departureTime > current.departureTime)
+  if (laterCandidates.length === 0) return null
+  return laterCandidates.reduce((earliest, b) => (b.departureTime < earliest.departureTime ? b : earliest))
+}
+
+// 좌석 재추천이 필요한지 판단하는 기준(버스 + 좌석 선호/배려/인원)을 하나의 값으로 묶는다.
+function seatRecommendationKey(bus: BusSchedule, session: ConversationSessionResult): string {
+  return JSON.stringify({
+    bus: `${bus.routeId}-${bus.departureTime}`,
+    seatPreferences: session.seatPreferences,
+    accessibilityNeeds: session.accessibilityNeeds,
+    passengers: session.passengers,
+  })
+}
+
 type Stage = 'chat' | 'payment' | 'ticket'
 
 export function ConversationPanel() {
@@ -68,6 +93,10 @@ export function ConversationPanel() {
   const [error, setError] = useState<string | null>(null)
   const [bus, setBus] = useState<BusSchedule | null>(null)
   const [seat, setSeat] = useState<SeatRecommendation | null>(null)
+  // 마지막 좌석 추천을 만든 조건(버스+좌석 선호/배려/인원). 조건이 그대로면 좌석을 다시 랜덤으로
+  // 뽑지 않고 그대로 보여준다 (안 그러면 "더 빠른 거 없어?"처럼 버스와 무관한 질문에도 좌석 배치가
+  // 매번 랜덤하게 다시 섞여서 마치 좌석만 바뀌는 것처럼 보인다).
+  const [seatSignature, setSeatSignature] = useState<string | null>(null)
   const [selectedSeat, setSelectedSeat] = useState<string | null>(null)
   const [selecting, setSelecting] = useState(false)
   const [seatHint, setSeatHint] = useState<string | null>(null)
@@ -154,6 +183,7 @@ export function ConversationPanel() {
         speak(session.clarificationPrompt)
         setBus(null)
         setSeat(null)
+        setSeatSignature(null)
         return
       }
 
@@ -164,6 +194,7 @@ export function ConversationPanel() {
         speak(question)
         setBus(null)
         setSeat(null)
+        setSeatSignature(null)
         return
       }
 
@@ -185,25 +216,54 @@ export function ConversationPanel() {
         speak(msg)
         setBus(null)
         setSeat(null)
+        setSeatSignature(null)
       } else {
-        const chosenBus = buses[0]
+        let chosenBus = buses[0]
+        let boundaryMessage: string | null = null
+
+        // "더 빠른/더 늦은 거 없어?"는 목록의 첫 버스를 다시 보여달라는 뜻이 아니라, 방금 안내한
+        // 버스보다 더 이르거나 늦은 시간을 찾아달라는 상대적 요청이다.
+        const sameRouteAsBefore = Boolean(bus) && bus!.departure === session.departure && bus!.arrival === session.arrival
+        if (session.wantsEarlierBus && sameRouteAsBefore) {
+          const earlier = findEarlierBus(buses, bus!)
+          if (earlier) {
+            chosenBus = earlier
+          } else {
+            chosenBus = bus!
+            boundaryMessage = '죄송해요, 이미 조건에 맞는 가장 이른 시간의 버스예요. '
+          }
+        } else if (session.wantsLaterBus && sameRouteAsBefore) {
+          const later = findLaterBus(buses, bus!)
+          if (later) {
+            chosenBus = later
+          } else {
+            chosenBus = bus!
+            boundaryMessage = '죄송해요, 이미 조건에 맞는 가장 늦은 시간의 버스예요. '
+          }
+        }
         setBus(chosenBus)
 
-        const seatData = await recommendSeat({
+        // 버스와 좌석 선호/배려/인원이 지난번과 똑같으면 좌석을 다시 뽑지 않고 그대로 유지한다.
+        const nextSignature = seatRecommendationKey(chosenBus, session)
+        let seatData = seat
+        if (!seatData || nextSignature !== seatSignature) {
+          seatData = await recommendSeat({
             seatPreferences: session.seatPreferences,
             accessibilityNeeds: session.accessibilityNeeds,
             busGrade: chosenBus.grade,
             passengers: session.passengers ?? 2,
           })
           setSeat(seatData)
+          setSeatSignature(nextSignature)
+        }
 
-        const isGroup = seatData.adjacentPair && seatData.alternatives.length > 0;
-        const seatText = isGroup && seatData.bestSeat
+        const isGroup = Boolean(seatData?.adjacentPair && seatData.alternatives.length > 0)
+        const seatText = isGroup && seatData?.bestSeat
           ? formatSeats([seatData.bestSeat, ...seatData.alternatives])
-          : (seatData.bestSeat?.seatNo ?? '');
+          : (seatData?.bestSeat?.seatNo ?? '');
 
-        const reasonText = seatData.reasons && seatData.reasons.length > 0 ? seatData.reasons[0] : ''
-        const msg = `${formatDateTime(chosenBus.departureTime)} 출발 ${chosenBus.grade} 버스입니다. ${reasonText} 추천 좌석은 ${seatText}번입니다.`
+        const reasonText = seatData?.reasons && seatData.reasons.length > 0 ? seatData.reasons[0] : ''
+        const msg = `${boundaryMessage ?? ''}${formatDateTime(chosenBus.departureTime)} 출발 ${chosenBus.grade} 버스입니다. ${reasonText} 추천 좌석은 ${seatText}번입니다.`
         setMessage(msg)
         speak(msg)
       }
@@ -223,6 +283,7 @@ export function ConversationPanel() {
     setStage('chat')
     setBus(null)
     setSeat(null)
+    setSeatSignature(null)
     setSelectedSeat(null)
     setSelecting(false)
     setSeatHint(null)

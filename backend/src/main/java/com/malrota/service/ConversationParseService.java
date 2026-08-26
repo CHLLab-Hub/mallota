@@ -129,10 +129,16 @@ public class ConversationParseService {
         List<String> missing = missingRequired(departure, arrival, date, departureTime, timePreference);
         String prompt = clarificationPrompt(missing, departure, arrival, passengers, passengerMentioned, seatPreferences, accessibilityNeeds);
 
+        // "더 빠른/더 늦은 거 없어?"는 세션에 계속 남는 조건이 아니라 이번 발화 한 번에 대한 요청이다.
+        // 이번 턴에 구체적인 시각(예: "8시로 바꿔줘")을 새로 말한 경우는 그 절대 시각 자체가
+        // 요청이므로 상대적 "더 이르게/늦게" 신호와 겹치지 않게 둔다.
+        boolean wantsEarlierBus = rules.wantsEarlierBus() && rules.departureTime() == null;
+        boolean wantsLaterBus = rules.wantsLaterBus() && rules.departureTime() == null;
+
         return new ConversationParseResponse(
                 intent, nullIfBlank(departure), nullIfBlank(arrival), nullIfBlank(date),
                 nullIfBlank(departureTime), timePreference, servicePreference, busGradePreference, passengers,
-                seatPreferences, accessibilityNeeds, missing, prompt
+                seatPreferences, accessibilityNeeds, missing, prompt, wantsEarlierBus, wantsLaterBus
         );
     }
 

@@ -56,7 +56,10 @@ public class ConversationController {
         }
 
         sessionService.refreshAfterParse(session);
-        return ConversationSessionResponse.from(session);
+        // wantsEarlierBus/wantsLaterBus는 세션에 저장하지 않는 1회성 신호라 이번 응답에만 실어 보낸다.
+        boolean wantsEarlierBus = parsed != null && parsed.wantsEarlierBus();
+        boolean wantsLaterBus = parsed != null && parsed.wantsLaterBus();
+        return ConversationSessionResponse.from(session, wantsEarlierBus, wantsLaterBus);
     }
 
     /**

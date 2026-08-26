@@ -125,7 +125,7 @@ public class SeatRecommendService {
         // 사용자가 원했던 구역에 연석이 잘 있었던 경우
         if ("ANY".equals(preferredSection) || preferredSection.equals(bestDef.position)) {
             if ("FRONT".equals(bestDef.position)) {
-                reasons.add("어르신과 함께 편안히 가실 수 있도록 승하차가 편한 앞쪽 연석입니다.");
+                reasons.add("승하차가 편한 앞쪽 연석입니다.");
             } else if ("MIDDLE".equals(bestDef.position)) {
                 reasons.add("흔들림이 적어 멀미가 덜한 중간 연석으로 나란히 준비했습니다.");
             } else {
@@ -175,7 +175,7 @@ public class SeatRecommendService {
 
         if ("ANY".equals(preferredSection) || preferredSection.equals(bestDef.position)) {
             if ("FRONT".equals(bestDef.position)) {
-                reasons.add("어르신과 함께 편안히 가실 수 있도록 승하차가 편한 앞쪽 자리로 세 분 좌석을 나란히 준비했습니다.");
+                reasons.add("승하차가 편한 앞쪽 자리로 세 분 좌석을 나란히 준비했습니다.");
             } else if ("MIDDLE".equals(bestDef.position)) {
                 reasons.add("흔들림이 적어 멀미가 덜한 중간 자리로 세 분이 함께 앉으실 수 있게 준비했습니다.");
             } else {
@@ -223,11 +223,11 @@ public class SeatRecommendService {
 
         if ("ANY".equals(preferredSection) || preferredSection.equals(bestDef.position)) {
             if ("FRONT".equals(bestDef.position)) {
-                reasons.add("어르신과 함께 편안히 가실 수 있도록 승하차가 편한 앞쪽 연석 두 줄(사각형)로 준비했습니다.");
+                reasons.add("승하차가 편한 앞쪽  두 줄씩 연석으로 준비했습니다.");
             } else if ("MIDDLE".equals(bestDef.position)) {
-                reasons.add("흔들림이 적어 멀미가 덜한 중간 자리에 네 분이 마주 보고 앉으실 수 있게 준비했습니다.");
+                reasons.add("흔들림이 적어 멀미가 덜한 중간 자리에 네 분이 앉으실 수 있게 준비했습니다.");
             } else {
-                reasons.add("요청하신 뒤쪽에 네 분이 두 줄로 마주 보고 앉으실 수 있는 자리로 준비했습니다.");
+                reasons.add("요청하신 뒤쪽에 네 분이 두 줄씩 앉으실 수 있는 자리로 준비했습니다.");
             }
         } else {
             reasons.add(String.format("요청하신 %s에는 네 분이 함께 앉으실 자리가 없어, %s에서 가장 가까운 %s번 자리(두 줄 연석)로 준비했습니다.",
@@ -341,7 +341,7 @@ public class SeatRecommendService {
 
             if (access.contains("WALKING_DIFFICULTY") && seat.position().equals("FRONT")) {
                 score += 15;
-                reasons.add("다리가 불편하셔서 타고 내리기 편한 앞쪽 좌석입니다.");
+                reasons.add("다리가 불편하셔서 승하차 편한 앞쪽 좌석입니다.");
             }
             if (access.contains("WALKING_DIFFICULTY") && seat.side().equals("AISLE")) {
                 score += 8;
@@ -353,7 +353,7 @@ public class SeatRecommendService {
             }
             if (access.contains("ELDERLY_CARE") && seat.position().equals("FRONT")) {
                 score += 10;
-                reasons.add("어르신이 이용하기 편한 앞쪽 좌석입니다.");
+                reasons.add("승하차가 편한 앞쪽 좌석입니다.");
             }
 
             if (prefs.contains("FRONT") && seat.position().equals("FRONT")) score += 6;

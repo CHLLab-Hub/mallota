@@ -64,4 +64,41 @@ class ConversationRuleExtractorTest {
         assertThat(result.departure()).isEqualTo("천안고속");
         assertThat(result.arrival()).isEqualTo("부산");
     }
+
+    @Test
+    void detects_relative_request_for_an_earlier_bus() {
+        assertThat(extractor.extract("더 빠른 거 없어?", base).wantsEarlierBus()).isTrue();
+        assertThat(extractor.extract("더 이른 시간대는 없나요", base).wantsEarlierBus()).isTrue();
+        assertThat(extractor.extract("조금 더 일찍 가는 걸로 줘", base).wantsEarlierBus()).isTrue();
+        assertThat(extractor.extract("내일 오전에 대전 가요", base).wantsEarlierBus()).isFalse();
+    }
+
+    @Test
+    void detects_relative_request_for_a_later_bus() {
+        assertThat(extractor.extract("더 늦은 거 없어?", base).wantsLaterBus()).isTrue();
+        assertThat(extractor.extract("더 나중 시간대는 없나요", base).wantsLaterBus()).isTrue();
+        assertThat(extractor.extract("조금 더 늦게 가는 걸로 줘", base).wantsLaterBus()).isTrue();
+        assertThat(extractor.extract("내일 오전에 대전 가요", base).wantsLaterBus()).isFalse();
+        // "더 빠른"과 "더 늦은"은 서로 배타적이어야 한다
+        assertThat(extractor.extract("더 빠른 거 없어?", base).wantsLaterBus()).isFalse();
+    }
+
+    @Test
+    void resolves_bare_hour_without_am_pm_marker_without_crashing() {
+        // "8시"처럼 오전/오후 표현 없이 시각만 말하면 24시간제 그대로(08:00) 해석한다.
+        var result = extractor.extract("8시 버스로 주세요", base);
+
+        assertThat(result.departureTime()).hasToString("08:00");
+    }
+
+    @Test
+    void does_not_mistake_a_reason_clause_ending_in_seo_for_a_place_name() {
+        // "-아서/-어서"는 이유를 나타내는 연결어미인데, GENERIC_DEP_PATTERN이 조사 "-서"와 표면적으로
+        // 똑같이 생겨서 "싫어"를 지명으로 오인하던 버그가 있었다 (기존 출발지를 엉뚱하게 덮어씀).
+        var result = extractor.extract("햇빛이 싫어서 통로자리로 잡아줘", base);
+
+        assertThat(result.departure()).isNull();
+        assertThat(result.arrival()).isNull();
+        assertThat(result.seatPreferences()).containsExactly("AISLE");
+    }
 }

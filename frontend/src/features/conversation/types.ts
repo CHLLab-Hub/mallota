@@ -74,4 +74,8 @@ export interface ConversationSessionResult {
   selectedBusId: string | null
   recommendedSeatNo: string | null
   bookingId: string | null
+  // 세션에 계속 남는 값이 아니라 "이번 발화"에 한해서만 오는 1회성 신호
+  // (예: "더 빠른/더 늦은 거 없어?" → 방금 보여준 버스보다 이르거나 늦은 시간을 찾아달라는 요청)
+  wantsEarlierBus: boolean
+  wantsLaterBus: boolean
 }

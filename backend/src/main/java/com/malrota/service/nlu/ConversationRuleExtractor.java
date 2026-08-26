@@ -66,10 +66,16 @@ public class ConversationRuleExtractor {
             standalone = wholeInputAsTerminal;
         } else {
             arrival = find(ARRIVAL_PATTERN, input);
-            if (arrival == null) arrival = find(GENERIC_ARR_PATTERN, input);
+            if (arrival == null) {
+                String genericArrival = find(GENERIC_ARR_PATTERN, input);
+                if (genericArrival != null && isPlausibleTerminal(genericArrival)) arrival = genericArrival;
+            }
 
             departure = find(DEPARTURE_PATTERN, input);
-            if (departure == null) departure = find(GENERIC_DEP_PATTERN, input);
+            if (departure == null) {
+                String genericDeparture = find(GENERIC_DEP_PATTERN, input);
+                if (genericDeparture != null && isPlausibleTerminal(genericDeparture)) departure = genericDeparture;
+            }
 
             // 단독 단어 입력(조사 없는 "강남", "사상")은 특정 방향으로 단정짓지 않고 식별만 수행!
             if (departure == null && arrival == null && input.length() <= 10) {
@@ -107,8 +113,29 @@ public class ConversationRuleExtractor {
                 needs,
                 hasSeatPreferenceExpression(input),
                 hasAccessibilityExpression(input),
-                standalone
+                standalone,
+                wantsEarlierBus(input),
+                wantsLaterBus(input)
         );
+    }
+
+    /**
+     * "더 빠른 거 없어?", "더 이른 시간대로" 처럼 방금 안내한 버스보다 더 이른 시간을 요청하는
+     * 상대적 표현인지 판별한다. "첫차"/"젤 빠른"(servicePreference=FIRST)과 달리 세션에 계속
+     * 남는 값이 아니라, 이번 발화 한 번에 대해서만 "이전에 보여준 버스보다 이르게"를 의미한다.
+     */
+    private boolean wantsEarlierBus(String text) {
+        return List.of("더 빠른", "더빠른", "더 이른", "더이른", "더 일찍", "더일찍", "조금 더 일찍", "좀 더 일찍", "당겨서", "더 당겨")
+                .stream().anyMatch(text::contains);
+    }
+
+    /**
+     * "더 늦은 거 없어?", "더 나중 시간대로" 처럼 방금 안내한 버스보다 더 늦은 시간을 요청하는
+     * 상대적 표현인지 판별한다. wantsEarlierBus와 대칭이며 마찬가지로 세션에 남지 않는 1회성 신호다.
+     */
+    private boolean wantsLaterBus(String text) {
+        return List.of("더 늦은", "더늦은", "더 나중", "더나중", "조금 더 늦게", "좀 더 늦게", "미뤄서", "더 미뤄", "뒤로 미뤄")
+                .stream().anyMatch(text::contains);
     }
 
     /**
@@ -120,6 +147,18 @@ public class ConversationRuleExtractor {
         if (TagoClient.isMultiTerminalCity(raw)) return raw;
         String canon = TagoClient.resolveCanonicalName(raw);
         return canon != null ? canon : raw;
+    }
+
+    /**
+     * GENERIC_DEP_PATTERN/GENERIC_ARR_PATTERN은 "대구", "대전"처럼 별칭으로 등록되지 않은 지명까지
+     * 넓게 잡으려고 조사(에서/서/발/행)만 보고 판단한다. 문제는 "-아서/-어서/-해서"(이유를 나타내는
+     * 연결어미, 예: "싫어서", "불편해서")도 표면적으로 똑같이 "~서"로 끝나서, "햇빛이 싫어서"의 "싫어"를
+     * 지명으로 오인해 기존 출발지를 엉뚱한 값으로 덮어써 버리는 사고가 있었다. TERMINALS 정규식으로
+     * 직접 매칭된 경우(DEPARTURE_PATTERN/ARRIVAL_PATTERN)는 애초에 등록된 이름이라 항상 신뢰할 수
+     * 있지만, 이 조사 기반 fallback은 실제 도시/터미널과 조금이라도 연관되는지 다시 확인해야 한다.
+     */
+    private boolean isPlausibleTerminal(String candidate) {
+        return TagoClient.isMultiTerminalCity(candidate) || TagoClient.resolveCanonicalName(candidate) != null;
     }
 
     /** 단독 지명 입력 처리 헬퍼 (TagoClient 연동) */
@@ -169,9 +208,11 @@ public class ConversationRuleExtractor {
             int hour = Integer.parseInt(timeMatcher.group(2));
             int minute = text.contains("반") ? 30 : (timeMatcher.group(3) != null ? Integer.parseInt(timeMatcher.group(3)) : 0);
 
-            if (List.of("오후", "저녁", "밤", "심야").contains(ampm) && hour < 12) hour += 12;
-            else if (List.of("낮", "점심").contains(ampm) && hour <= 6) hour += 12;
-            else if (List.of("오전", "새벽", "아침").contains(ampm) && hour == 12) hour = 0;
+            // ampm은 "8시"처럼 오전/오후 표현 없이 시각만 말한 경우 null일 수 있다 (List.of(...).contains(null)은
+            // NullPointerException을 던지므로 반드시 null 체크 후에 검사해야 한다).
+            if (ampm != null && List.of("오후", "저녁", "밤", "심야").contains(ampm) && hour < 12) hour += 12;
+            else if (ampm != null && List.of("낮", "점심").contains(ampm) && hour <= 6) hour += 12;
+            else if (ampm != null && List.of("오전", "새벽", "아침").contains(ampm) && hour == 12) hour = 0;
 
             if (hour < 24 && minute < 60) time = LocalTime.of(hour, minute);
         }
@@ -352,7 +393,9 @@ public class ConversationRuleExtractor {
         List<String> accessibilityNeeds,
         boolean seatPreferenceMentioned,
         boolean accessibilityMentioned,
-        String standaloneTerminal
+        String standaloneTerminal,
+        boolean wantsEarlierBus,
+        boolean wantsLaterBus
     ) {}
 
     private record DateTimeResolution(LocalDate date, LocalTime departureTime) {}

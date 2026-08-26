@@ -15,6 +15,8 @@ public record ConversationParseResponse(
     List<String> seatPreferences,
     List<String> accessibilityNeeds,
     List<String> missingFields,
-    String clarificationPrompt
+    String clarificationPrompt,
+    boolean wantsEarlierBus,
+    boolean wantsLaterBus
 ) {
 }

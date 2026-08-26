@@ -68,7 +68,7 @@ class SeatRecommendServiceTest {
         var result = service.recommend(new SeatRecommendRequest("우등", List.of(), List.of("WALKING_DIFFICULTY"), 1));
 
         assertThat(result.bestSeat().seatNo()).isEqualTo("1A");
-        assertThat(result.reasons()).contains("다리가 불편하셔서 타고 내리기 편한 앞쪽 좌석입니다.");
+        assertThat(result.reasons()).contains("다리가 불편하셔서 승하차 편한 앞쪽 좌석입니다.");
     }
 
     @Test
