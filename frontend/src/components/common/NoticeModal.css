@@ -1,0 +1,101 @@
+/* 화면 위에 덮는 안내 팝업 — 브라우저 alert와 달리 음성 안내를 막지 않는다 */
+.notice-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 100;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 24px;
+  background: rgba(43, 35, 32, 0.55);
+  animation: notice-fade 0.18s ease-out;
+}
+
+.notice-card {
+  width: min(100%, 340px);
+  background: #fff;
+  border-radius: 20px;
+  padding: 28px 22px 22px;
+  text-align: center;
+  box-shadow: 0 18px 44px rgba(43, 35, 32, 0.28);
+  animation: notice-pop 0.22s cubic-bezier(0.2, 0.8, 0.3, 1);
+}
+
+.notice-icon {
+  font-size: 3rem;
+  line-height: 1;
+}
+
+.notice-title {
+  margin: 12px 0 0;
+  font-size: 1.4rem;
+  font-weight: 800;
+  line-height: 1.35;
+  color: #2b2320;
+}
+
+.notice-detail {
+  margin-top: 18px;
+  padding-top: 18px;
+  border-top: 1px dashed #f0d5b8;
+  text-align: left;
+  font-size: 1.05rem;
+  color: #2b2320;
+}
+
+/* 팝업에 넣는 승차권 요약 */
+.notice-route {
+  margin-bottom: 12px;
+  text-align: center;
+  font-size: 1.25rem;
+  font-weight: 800;
+}
+
+.notice-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+}
+
+.notice-row .label {
+  color: #58665f;
+}
+
+.notice-row .value {
+  font-weight: 700;
+}
+
+.notice-row .value.accent {
+  color: #f07f21;
+}
+
+.notice-confirm {
+  margin-top: 22px;
+  width: 100%;
+  padding: 15px;
+  border: none;
+  border-radius: 14px;
+  background: #f57f20;
+  color: #fff;
+  font-size: 1.15rem;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+@keyframes notice-fade {
+  from { opacity: 0; }
+  to { opacity: 1; }
+}
+
+@keyframes notice-pop {
+  from { opacity: 0; transform: translateY(12px) scale(0.96); }
+  to { opacity: 1; transform: none; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .notice-overlay,
+  .notice-card {
+    animation: none;
+  }
+}

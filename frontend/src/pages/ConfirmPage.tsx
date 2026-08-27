@@ -1,7 +1,9 @@
 import { useEffect, useRef, useState } from 'react'
 import { createBooking, getBookingOwnerId } from '../api/bookingApi'
+import { NoticeModal } from '../components/common/NoticeModal'
 import { useAppState } from '../features/conversation/AppState'
 import { VoicePanel, speak } from '../features/conversation/VoicePanel'
+import type { Booking } from '../features/conversation/types'
 import './HomePage.css'
 
 function formatTime(raw: string): string {
@@ -27,6 +29,8 @@ export function ConfirmPage() {
 
   const announced = useRef(false)
   const [isPaying, setIsPaying] = useState(false)
+  // 결제가 끝나면 확인 팝업에 보여줄, 백엔드가 확정해서 돌려준 예매 내역
+  const [paidBooking, setPaidBooking] = useState<Booking | null>(null)
 
   function appSay(t: string) {
     addMessage('app', t)
@@ -46,7 +50,7 @@ export function ConfirmPage() {
   }, [])
 
   async function pay() {
-    if (!selectedBus || isPaying) return
+    if (!selectedBus || isPaying || paidBooking) return
     setIsPaying(true)
     try {
       const booking = await createBooking({
@@ -57,25 +61,39 @@ export function ConfirmPage() {
         totalFare,
       })
       addBooking(booking)
-      appSay('결제가 완료되었습니다. 안전한 여행 되세요.')
-      setTimeout(() => {
-        setSelectedBus(null)
-        setSeat(null)
-        setSelectedSeatNo(null)
-        setSessionId(null)
-        setRecommendations([])
-        resetMessages()
-        setScreen('home')
-      }, 2000)
+      addBooking(booking)
+      setPaidBooking(booking)
+      appSay('결제가 완료되었습니다. 안전한 여행 되세요. 확인을 누르시면 처음 화면으로 돌아갑니다.')
+    } catch {
     } catch {
       appSay('예매 정보를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.')
-    } finally {
+      // 실패했을 때만 결제 버튼을 다시 열어준다 — 성공 후에는 팝업이 뜬 채로 잠가 두어 중복 예매를 막는다
       setIsPaying(false)
     }
   }
 
+  // 결제 완료 팝업의 확인을 누르면 이번 예매 흐름을 정리하고 처음 화면으로 돌아간다
+  function finishPayment() {
+    setPaidBooking(null)
+    setSelectedBus(null)
+    setSeat(null)
+    setSelectedSeatNo(null)
+    setSessionId(null)
+    resetMessages()
+    setScreen('home')
+  }
+
   function handleUserSpeak(text: string) {
     addMessage('user', text)
+    // 결제가 끝난 뒤에는 어떤 말도 결제로 이어지지 않게 하고, 팝업을 닫는 대답만 받는다
+    if (paidBooking) {
+      if (text.includes('확인') || text.includes('네') || text.includes('닫') || text.includes('홈') || text.includes('알겠')) {
+        finishPayment()
+      } else {
+        appSay('결제가 완료되었습니다. 확인을 누르시거나 확인이라고 말씀해 주세요.')
+      }
+      return
+    }
     if (text.includes('결제') || text.includes('네') || text.includes('할게') || text.includes('좋아') || text.includes('그래') || text.includes('예')) {
       pay()
     } else if (text.includes('취소') || text.includes('아니') || text.includes('뒤로')) {
@@ -147,6 +165,34 @@ export function ConfirmPage() {
 
         <VoicePanel onUserSpeak={handleUserSpeak} compact />
       </div>
+
+      {paidBooking && (
+        <NoticeModal icon="🎫" title="결제가 완료되었습니다" onConfirm={finishPayment}>
+          <div className="notice-route">
+            {paidBooking.bus.departure} → {paidBooking.bus.arrival}
+          </div>
+          <div className="notice-row">
+            <span className="label">날짜</span>
+            <span className="value">{formatDate(paidBooking.bus.departureTime)}</span>
+          </div>
+          <div className="notice-row">
+            <span className="label">출발</span>
+            <span className="value">{formatTime(paidBooking.bus.departureTime)}</span>
+          </div>
+          <div className="notice-row">
+            <span className="label">좌석</span>
+            <span className="value accent">{paidBooking.seatNo}</span>
+          </div>
+          <div className="notice-row">
+            <span className="label">인원</span>
+            <span className="value">{paidBooking.passengers}명</span>
+          </div>
+          <div className="notice-row">
+            <span className="label">총 요금</span>
+            <span className="value accent">{paidBooking.totalFare.toLocaleString()}원</span>
+          </div>
+        </NoticeModal>
+      )}
     </div>
   )
 }
