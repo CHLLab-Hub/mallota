@@ -176,7 +176,12 @@ public class ConversationParseService {
         String departureTime = rules.ambiguousMeridiem() ? null
                 : (freshServicePreference && !freshDepartureTime) ? null
                 : firstNonBlank(rules.departureTime() == null ? null : rules.departureTime().toString(), sessionValue(session, ConversationSession::getDepartureTime), value(llm, ConversationParseResponse::departureTime));
-        String timePreference = firstNonBlank(rules.timePreference(), sessionValue(session, ConversationSession::getTimePreference), value(llm, ConversationParseResponse::timePreference), "ANY");
+        // 첫차/막차는 "그 날의 가장 이르거나 늦은 버스"라는 절대적인 의미라, 세션에 남아있던 옛
+        // 시간대 선호(예: 오전/오후)와 함께 살아남으면 검색 단계에서 옛 시간대 안에서만 가장
+        // 늦은 버스를 찾아버려 진짜 막차가 아닌 엉뚱한 시각이 나온다. 이번 턴에 시간대를 새로
+        // 언급하지 않았다면(순수하게 첫차/막차만 말한 경우) 옛 시간대 선호를 밀어내고 "ANY"로 둔다.
+        String timePreference = (freshServicePreference && rules.timePreference() == null) ? "ANY"
+                : firstNonBlank(rules.timePreference(), sessionValue(session, ConversationSession::getTimePreference), value(llm, ConversationParseResponse::timePreference), "ANY");
         String servicePreference = (freshDepartureTime && !freshServicePreference) ? "ANY"
                 : firstNonBlank(rules.servicePreference(), sessionValue(session, ConversationSession::getServicePreference), value(llm, ConversationParseResponse::servicePreference), "ANY");
         String busGradePreference = firstNonBlank(rules.busGradePreference(), sessionValue(session, ConversationSession::getBusGradePreference), value(llm, ConversationParseResponse::busGradePreference), "ANY");
@@ -225,11 +230,37 @@ public class ConversationParseService {
             }
         }
 
-        if (correctionAck != null) {
-            // 정정을 이해했다는 게 확실하니, 뒤이은 질문이 우연히 직전과 같은 문구여도
+        // 이번 발화에서 뭔가는 실제로 알아들었는지 판단한다. "아니다 막차로 할래"처럼 다른 질문이
+        // 밀려 있는 도중에 서비스 선호/날짜/인원 등 별개의 조건을 성공적으로 바꿨을 때도, 그 조건과
+        // 무관한 질문(예: 터미널 되묻기)이 우연히 똑같이 다시 나가면 "죄송해요, 잘 못 알아들었어요"가
+        // 붙어버려 실제로는 알아들은 것도 못 알아들은 것처럼 보이는 사고가 있었다.
+        boolean understoodSomethingThisTurn = standaloneConsumed
+                || rules.departure() != null || rules.arrival() != null || rules.date() != null
+                || freshDepartureTime || freshServicePreference || rules.busGradePreference() != null
+                || passengerMentionedThisTurn || seatPreferenceMentionedThisTurn
+                || rules.wantsEarlierBus() || rules.wantsLaterBus();
+
+        // 터미널 정정 외에도, 첫차/막차나 버스 등급처럼 이번 턴에 새로 확정된 조건은 다른(무관한)
+        // 질문에 가려 아무 확인 문구 없이 조용히 바뀌면 사용자가 실제로 반영됐는지 알 수 없다.
+        String changeAck = correctionAck;
+        if (changeAck == null && freshServicePreference) {
+            if ("FIRST".equalsIgnoreCase(servicePreference)) changeAck = "네, 첫차로 준비할게요.";
+            else if ("LAST".equalsIgnoreCase(servicePreference)) changeAck = "네, 막차로 준비할게요.";
+        }
+        if (changeAck == null && rules.busGradePreference() != null) {
+            changeAck = switch (rules.busGradePreference().toUpperCase()) {
+                case "PREMIUM" -> "네, 프리미엄 등급으로 준비할게요.";
+                case "EXCELLENT" -> "네, 우등 등급으로 준비할게요.";
+                case "GENERAL" -> "네, 일반 등급으로 준비할게요.";
+                default -> null;
+            };
+        }
+
+        if (changeAck != null) {
+            // 뭔가 확정됐다는 게 확실하니, 뒤이은 질문이 우연히 직전과 같은 문구여도
             // "죄송해요, 잘 못 알아들었어요"를 붙이지 않는다 — 실제로는 알아들었기 때문이다.
-            prompt = prompt == null ? correctionAck : correctionAck + " " + prompt;
-        } else if (prompt != null && !isBlank(rawText) && prompt.equals(previousPrompt)) {
+            prompt = prompt == null ? changeAck : changeAck + " " + prompt;
+        } else if (prompt != null && !isBlank(rawText) && !understoodSomethingThisTurn && prompt.equals(previousPrompt)) {
             prompt = "죄송해요, 잘 못 알아들었어요. " + prompt;
         }
 
@@ -442,10 +473,11 @@ public class ConversationParseService {
         4. 신체/좌석 배려:
            - 다리/무릎 통증, 도가니, 시큰거림, 삭신, 계단 힘듦 -> accessibilityNeeds에 "WALKING_DIFFICULTY" & seatPreferences에 "FRONT"
            - 멀미, 속 울렁거림, 메스꺼움 -> accessibilityNeeds에 "MOTION_SICKNESS" & seatPreferences에 "MIDDLE"
-           - 임산부, 임신, 만삭 -> accessibilityNeeds에 "PREGNANCY" & seatPreferences에 "FRONT"
-           - 아기/유아/신생아 동반 -> accessibilityNeeds에 "INFANT_CARE" & seatPreferences에 "FRONT"
+           - 임산부, 임신, 만삭 -> accessibilityNeeds에 "PREGNANCY" & seatPreferences에 "AISLE"
            - 시각장애, 안내견 동반 -> accessibilityNeeds에 "VISUAL_IMPAIRMENT" & seatPreferences에 "FRONT"
-        5. 등급 선호: "우등"->EXCELLENT, "프리미엄/편한 거"->PREMIUM, "일반/싼 거/싼 놈"->GENERAL, "아무거나"->ANY.
+        5. 등급 선호: "우등"->EXCELLENT, "프리미엄"/"비싼 버스"/"고급 버스"/"누워서 가는 거"->PREMIUM, "일반/싼 거/싼 놈"->GENERAL, "아무거나"->ANY.
+           주의: "편안한 자리였으면 좋겠다", "편한 좌석으로" 처럼 좌석 자체의 편안함을 말한 것은 버스 등급(busGradePreference)이 아니라
+           seatPreferences/accessibilityNeeds에 해당하는 표현입니다. "버스가 편하다"는 말이 아니라면 PREMIUM으로 단정하지 마세요.
            언급이 없으면 기존 수집 정보의 값을 유지하고, 기존 정보도 없으면 "ANY"를 반환하세요.
         6. 상태 병합(가장 중요): 이번 발화에서 새로 언급된 조건만 갱신하고, 언급되지 않은 나머지 필드는 반드시 [입력 정보]의 "기존 수집 정보" 값을 그대로 복사해서 반환하세요.
            특히 servicePreference, busGradePreference, timePreference, passengers는 이번 발화에 언급 없다고 해서 임의로 "ANY"나 1로 초기화하면 안 됩니다 — 사용자가 이전에 말했던 조건을 잃어버리게 됩니다.

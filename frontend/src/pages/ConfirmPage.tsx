@@ -22,7 +22,7 @@ export function ConfirmPage() {
   const {
     selectedBus, seat, selectedSeatNo, passengers,
     setScreen, addMessage, addBooking, resetMessages,
-    setSelectedBus, setSeat, setSelectedSeatNo, setSessionId,
+    setSelectedBus, setSeat, setSelectedSeatNo, setSessionId, setRecommendations,
   } = useAppState()
 
   const announced = useRef(false)
@@ -63,6 +63,7 @@ export function ConfirmPage() {
         setSeat(null)
         setSelectedSeatNo(null)
         setSessionId(null)
+        setRecommendations([])
         resetMessages()
         setScreen('home')
       }, 2000)
@@ -144,7 +145,7 @@ export function ConfirmPage() {
           {isPaying ? '예매 저장 중...' : '결제하기'}
         </button>
 
-        <VoicePanel onUserSpeak={handleUserSpeak} />
+        <VoicePanel onUserSpeak={handleUserSpeak} compact />
       </div>
     </div>
   )

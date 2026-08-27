@@ -95,7 +95,12 @@ public class ConversationSession {
         if (departure != null && !departure.isBlank()) this.departure = departure;
         if (arrival != null && !arrival.isBlank()) this.arrival = arrival;
         if (date != null && !date.isBlank()) this.date = date;
-        if (departureTime != null && !departureTime.isBlank()) this.departureTime = departureTime;
+        // departureTime은 다른 필드와 달리 null이 "이번 턴에 언급 없음"이 아니라 "첫차/막차처럼
+        // 정확한 시각과 배타적인 조건이 새로 확정되어 옛 시각을 일부러 지운다"는 의미로도 쓰인다
+        // (ConversationParseService.normalize 참고). 그래서 null이어도 그대로 반영해야 한다 —
+        // 다른 필드처럼 null이면 무시하고 옛 값을 유지하면, "말고 막차로"라고 정정해도 세션에는
+        // 옛 정확한 시각이 계속 남아 응답에 다시 섞여 나온다.
+        this.departureTime = departureTime;
         if (timePreference != null && !timePreference.isBlank()) this.timePreference = timePreference;
         if (servicePreference != null && !servicePreference.isBlank()) this.servicePreference = servicePreference;
         if (busGradePreference != null && !busGradePreference.isBlank()) this.busGradePreference = busGradePreference;

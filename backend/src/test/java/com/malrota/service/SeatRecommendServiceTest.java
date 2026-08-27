@@ -72,31 +72,34 @@ class SeatRecommendServiceTest {
     }
 
     @Test
-    @DisplayName("임산부(PREGNANCY) 시 승하차 편한 통로 쪽 앞자리 우선 추천")
-    void prioritizes_front_aisle_seat_for_pregnancy() {
+    @DisplayName("임산부(PREGNANCY)는 앞쪽 자리보다 화장실 접근이 쉬운 통로 쪽 좌석을 우선 추천")
+    void prioritizes_aisle_seat_over_front_seat_for_pregnancy() {
         SeatRecommendService service = serviceWith(List.of(
-                new Seat("1A", 1, 1, "FRONT", "AISLE", true),
-                new Seat("8B", 8, 2, "BACK", "WINDOW", true)
+                new Seat("1A", 1, 1, "FRONT", "WINDOW", true),
+                new Seat("3B", 3, 2, "MIDDLE", "AISLE", true)
         ));
 
         var result = service.recommend(new SeatRecommendRequest("우등", List.of(), List.of("PREGNANCY"), 1));
 
-        assertThat(result.bestSeat().seatNo()).isEqualTo("1A");
-        assertThat(result.reasons()).contains("임산부분이시라 승하차 편한 앞쪽 좌석입니다.", "화장실 이용이 편한 통로 쪽 좌석입니다.");
+        assertThat(result.bestSeat().seatNo()).isEqualTo("3B");
+        assertThat(result.reasons()).contains("화장실 이용이 편한 통로 쪽 좌석입니다.");
+        assertThat(result.reasons()).doesNotContain("임산부분이시라 승하차 편한 앞쪽 좌석입니다.");
     }
 
     @Test
-    @DisplayName("영유아 동반(INFANT_CARE) 시 승무원 도움받기 편한 앞자리 우선 추천")
-    void prioritizes_front_seat_for_infant_care() {
+    @DisplayName("프리미엄 등급 + 임산부(PREGNANCY)는 1열 창가석(C좌석)을 다른 앞자리보다 우선 추천")
+    void prioritizes_row_one_window_c_seat_for_pregnancy_on_premium_grade() {
         SeatRecommendService service = serviceWith(List.of(
-                new Seat("1A", 1, 1, "FRONT", "AISLE", true),
-                new Seat("8B", 8, 2, "BACK", "WINDOW", true)
+                new Seat("1A", 1, 1, "FRONT", "WINDOW", true),
+                new Seat("1B", 1, 2, "FRONT", "AISLE", true),
+                new Seat("1C", 1, 4, "FRONT", "WINDOW", true),
+                new Seat("8C", 8, 4, "BACK", "WINDOW", true)
         ));
 
-        var result = service.recommend(new SeatRecommendRequest("우등", List.of(), List.of("INFANT_CARE"), 1));
+        var result = service.recommend(new SeatRecommendRequest("프리미엄", List.of(), List.of("PREGNANCY"), 1));
 
-        assertThat(result.bestSeat().seatNo()).isEqualTo("1A");
-        assertThat(result.reasons()).contains("아기와 함께 타셔서 기사님·승무원 도움을 받기 편한 앞쪽 좌석입니다.");
+        assertThat(result.bestSeat().seatNo()).isEqualTo("1C");
+        assertThat(result.reasons()).contains("임산부분이시라 프리미엄 1열 창가 좌석으로 편안하게 준비했습니다.");
     }
 
     @Test

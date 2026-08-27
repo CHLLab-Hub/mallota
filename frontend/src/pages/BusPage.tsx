@@ -176,7 +176,7 @@ export function BusPage() {
           ))
         )}
 
-        <VoicePanel onUserSpeak={handleUserSpeak} loading={loading} />
+        <VoicePanel onUserSpeak={handleUserSpeak} loading={loading} compact />
       </div>
     </div>
   )

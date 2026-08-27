@@ -7,7 +7,6 @@ export type AccessibilityNeed =
   | 'MOTION_SICKNESS'
   | 'ELDERLY_CARE'
   | 'PREGNANCY'
-  | 'INFANT_CARE'
   | 'VISUAL_IMPAIRMENT'
 
 export interface SearchCondition {

@@ -34,18 +34,19 @@ public class SeatRecommendService {
         // 2인 이상 예매 시 ➔ 인원수에 맞는 그룹 배치 우선 탐색. 나란히 붙은 자리(가로/세로)가 전혀 없는
         // 등급(예: 프리미엄의 통로 건너 홀로 좌석)에서도 마지막에는 "따로따로"로라도 반드시 인원수만큼
         // 배정한다 — 좌석 배치가 안 맞는다고 아무것도 못 찾아주는 일이 없게 한다.
+        String busGrade = request.busGrade();
         if (passengers >= 2) {
             SeatRecommendation groupRec = switch (passengers) {
-                case 2 -> recommendPair(seats, access, prefs, allowVerticalPair);
+                case 2 -> recommendPair(seats, access, prefs, allowVerticalPair, busGrade);
                 case 3 -> {
-                    SeatRecommendation triple = recommendTriple(seats, access, prefs);
-                    yield triple != null ? triple : recommendSeparatePassengers(seats, access, prefs, 3);
+                    SeatRecommendation triple = recommendTriple(seats, access, prefs, busGrade);
+                    yield triple != null ? triple : recommendSeparatePassengers(seats, access, prefs, 3, busGrade);
                 }
                 default -> {
-                    SeatRecommendation quad = recommendQuad(seats, access, prefs);
+                    SeatRecommendation quad = recommendQuad(seats, access, prefs, busGrade);
                     if (quad != null) yield quad;
-                    SeatRecommendation triple = recommendTriple(seats, access, prefs);
-                    yield triple != null ? triple : recommendSeparatePassengers(seats, access, prefs, passengers);
+                    SeatRecommendation triple = recommendTriple(seats, access, prefs, busGrade);
+                    yield triple != null ? triple : recommendSeparatePassengers(seats, access, prefs, passengers, busGrade);
                 }
             };
             if (groupRec != null) {
@@ -54,7 +55,7 @@ public class SeatRecommendService {
         }
 
         // 1인 예매 ➔ 개별 좌석 가중치 추천
-        return recommendSingleSeat(seats, access, prefs);
+        return recommendSingleSeat(seats, access, prefs, busGrade);
     }
 
     // ---- 공통 헬퍼: 선호 구역 판별 ----
@@ -69,8 +70,7 @@ public class SeatRecommendService {
         if (prefs.contains("FRONT")) return "FRONT";
         if (prefs.contains("MIDDLE")) return "MIDDLE";
         if (prefs.contains("BACK")) return "BACK";
-        if (access.contains("WALKING_DIFFICULTY") || access.contains("ELDERLY_CARE")
-                || access.contains("PREGNANCY") || access.contains("INFANT_CARE") || access.contains("VISUAL_IMPAIRMENT")) {
+        if (access.contains("WALKING_DIFFICULTY") || access.contains("ELDERLY_CARE") || access.contains("VISUAL_IMPAIRMENT")) {
             return "FRONT";
         }
         if (access.contains("MOTION_SICKNESS")) return "MIDDLE";
@@ -102,7 +102,7 @@ public class SeatRecommendService {
      * 그마저 없으면 따로따로라도 가까운 자리 2석을 배정한다 (예: 프리미엄 등급은 통로 건너편이
      * 홀로 좌석이라 가로 연석이 원천적으로 불가능한 줄이 있다).
      */
-    private SeatRecommendation recommendPair(List<Seat> seats, List<String> access, List<String> prefs, boolean allowVerticalPair) {
+    private SeatRecommendation recommendPair(List<Seat> seats, List<String> access, List<String> prefs, boolean allowVerticalPair, String busGrade) {
         List<PairDefinition> pairDefs = findAdjacentPairs(seats);
         boolean vertical = false;
         if (pairDefs.isEmpty() && allowVerticalPair) {
@@ -119,12 +119,12 @@ public class SeatRecommendService {
         boolean hasPairInPreferredSection = !"ANY".equals(preferredSection)
                 && pairDefs.stream().anyMatch(p -> preferredSection.equals(p.position));
         if (!"ANY".equals(preferredSection) && !hasPairInPreferredSection) {
-            SeatRecommendation inSection = trySeparateWithinSection(seats, access, prefs, preferredSection, preferredSectionKorean, 2, "두 분");
+            SeatRecommendation inSection = trySeparateWithinSection(seats, access, prefs, preferredSection, preferredSectionKorean, 2, "두 분", busGrade);
             if (inSection != null) return inSection;
         }
 
         if (pairDefs.isEmpty()) {
-            return recommendSeparatePassengers(seats, access, prefs, 2);
+            return recommendSeparatePassengers(seats, access, prefs, 2, busGrade);
         }
 
         int targetRow = targetRow(seats, preferredSection);
@@ -187,7 +187,7 @@ public class SeatRecommendService {
     }
 
     /** 3인 배치 탐색: 같은 줄에서 연석(2) + 통로 건너 1석을 함께 배정 */
-    private SeatRecommendation recommendTriple(List<Seat> seats, List<String> access, List<String> prefs) {
+    private SeatRecommendation recommendTriple(List<Seat> seats, List<String> access, List<String> prefs, String busGrade) {
         List<TripleDefinition> tripleDefs = findRowTriples(seats);
 
         String preferredSection = preferredSection(access, prefs);
@@ -196,7 +196,7 @@ public class SeatRecommendService {
         boolean hasTripleInPreferredSection = !"ANY".equals(preferredSection)
                 && tripleDefs.stream().anyMatch(t -> preferredSection.equals(t.position));
         if (!"ANY".equals(preferredSection) && !hasTripleInPreferredSection) {
-            SeatRecommendation inSection = trySeparateWithinSection(seats, access, prefs, preferredSection, preferredSectionKorean, 3, "세 분");
+            SeatRecommendation inSection = trySeparateWithinSection(seats, access, prefs, preferredSection, preferredSectionKorean, 3, "세 분", busGrade);
             if (inSection != null) return inSection;
         }
 
@@ -255,7 +255,7 @@ public class SeatRecommendService {
     }
 
     /** 4인 배치 탐색: 앞뒤로 이어진 두 줄에 동일한 칸의 연석을 배정하여 사각형(2x2) 배치를 만듦 */
-    private SeatRecommendation recommendQuad(List<Seat> seats, List<String> access, List<String> prefs) {
+    private SeatRecommendation recommendQuad(List<Seat> seats, List<String> access, List<String> prefs, String busGrade) {
         List<QuadDefinition> quadDefs = findRectangles(seats);
 
         String preferredSection = preferredSection(access, prefs);
@@ -264,7 +264,7 @@ public class SeatRecommendService {
         boolean hasQuadInPreferredSection = !"ANY".equals(preferredSection)
                 && quadDefs.stream().anyMatch(q -> preferredSection.equals(q.position));
         if (!"ANY".equals(preferredSection) && !hasQuadInPreferredSection) {
-            SeatRecommendation inSection = trySeparateWithinSection(seats, access, prefs, preferredSection, preferredSectionKorean, 4, "네 분");
+            SeatRecommendation inSection = trySeparateWithinSection(seats, access, prefs, preferredSection, preferredSectionKorean, 4, "네 분", busGrade);
             if (inSection != null) return inSection;
         }
 
@@ -330,8 +330,8 @@ public class SeatRecommendService {
      */
     private SeatRecommendation trySeparateWithinSection(List<Seat> seats, List<String> access, List<String> prefs,
                                                           String preferredSection, String preferredSectionKorean,
-                                                          int size, String peopleNoun) {
-        List<ScoredSeat> inSection = rankSingleSeatsScored(seats, access, prefs).stream()
+                                                          int size, String peopleNoun, String busGrade) {
+        List<ScoredSeat> inSection = rankSingleSeatsScored(seats, access, prefs, busGrade).stream()
                 .filter(s -> preferredSection.equals(s.seat().position()))
                 .toList();
         if (inSection.size() < size) {
@@ -361,8 +361,8 @@ public class SeatRecommendService {
      * 나란히든 앞뒤든 붙어있는 자리를 아예 만들 수 없을 때(예: 프리미엄 등급의 통로 건너 홀로 좌석만
      * 남은 경우)의 마지막 수단: 인원수만큼 "따로따로"라도 각자 가장 좋은 자리를 배정한다.
      */
-    private SeatRecommendation recommendSeparatePassengers(List<Seat> seats, List<String> access, List<String> prefs, int count) {
-        List<ScoredSeat> ranked = rankSingleSeatsScored(seats, access, prefs);
+    private SeatRecommendation recommendSeparatePassengers(List<Seat> seats, List<String> access, List<String> prefs, int count, String busGrade) {
+        List<ScoredSeat> ranked = rankSingleSeatsScored(seats, access, prefs, busGrade);
         if (ranked.isEmpty()) {
             return new SeatRecommendation(null, 0, List.of("예약 가능한 좌석이 없습니다."), List.of(), false, seats, List.of());
         }
@@ -503,22 +503,22 @@ public class SeatRecommendService {
         return pairs;
     }
 
-    private SeatRecommendation recommendSingleSeat(List<Seat> seats, List<String> access, List<String> prefs) {
-        List<Seat> ranked = rankSingleSeats(seats, access, prefs);
+    private SeatRecommendation recommendSingleSeat(List<Seat> seats, List<String> access, List<String> prefs, String busGrade) {
+        List<Seat> ranked = rankSingleSeats(seats, access, prefs, busGrade);
         if (ranked.isEmpty()) {
             return new SeatRecommendation(null, 0, List.of("예약 가능한 좌석이 없습니다."), List.of(), false, List.of(), List.of());
         }
 
         Seat bestSeat = ranked.get(0);
-        List<String> reasons = seatReasons(bestSeat, access, prefs);
+        List<String> reasons = seatReasons(bestSeat, access, prefs, busGrade);
         if (reasons.isEmpty()) reasons.add("예약 가능한 좌석입니다.");
 
         // 동점(같은 점수)인 나머지 좌석은 "동률 대안"("같은 조건 좌석")으로 함께 보여준다.
         int targetRow = targetRow(seats, preferredSection(access, prefs));
-        int bestScore = seatScore(bestSeat, access, prefs, targetRow);
+        int bestScore = seatScore(bestSeat, access, prefs, targetRow, busGrade);
         List<Seat> tiedAlternatives = ranked.stream()
                 .skip(1)
-                .filter(s -> seatScore(s, access, prefs, targetRow) == bestScore)
+                .filter(s -> seatScore(s, access, prefs, targetRow, busGrade) == bestScore)
                 .toList();
 
         return new SeatRecommendation(bestSeat, bestScore, reasons, tiedAlternatives, false, seats, tiedAlternatives);
@@ -528,19 +528,19 @@ public class SeatRecommendService {
     private record ScoredSeat(Seat seat, int score) {}
 
     /** 예약 가능한 좌석을 개인 선호/배려 점수 내림차순으로 정렬하고, 각 좌석의 점수도 함께 담는다 */
-    private List<ScoredSeat> rankSingleSeatsScored(List<Seat> seats, List<String> access, List<String> prefs) {
+    private List<ScoredSeat> rankSingleSeatsScored(List<Seat> seats, List<String> access, List<String> prefs, String busGrade) {
         String preferredSection = preferredSection(access, prefs);
         int targetRow = targetRow(seats, preferredSection);
         return seats.stream()
                 .filter(Seat::available)
-                .map(s -> new ScoredSeat(s, seatScore(s, access, prefs, targetRow)))
+                .map(s -> new ScoredSeat(s, seatScore(s, access, prefs, targetRow, busGrade)))
                 .sorted(Comparator.comparingInt(ScoredSeat::score).reversed())
                 .toList();
     }
 
     /** 예약 가능한 좌석을 개인 선호/배려 점수 내림차순으로 정렬 (없으면 빈 리스트) */
-    private List<Seat> rankSingleSeats(List<Seat> seats, List<String> access, List<String> prefs) {
-        return rankSingleSeatsScored(seats, access, prefs).stream().map(ScoredSeat::seat).toList();
+    private List<Seat> rankSingleSeats(List<Seat> seats, List<String> access, List<String> prefs, String busGrade) {
+        return rankSingleSeatsScored(seats, access, prefs, busGrade).stream().map(ScoredSeat::seat).toList();
     }
 
     /**
@@ -554,17 +554,23 @@ public class SeatRecommendService {
      * 나오는 사고(뒷자리 요청 → 매진 → 조용히 앞자리 배정)를 막는다. 원하는 구역과 가까울수록
      * 유리하게 해서, 매진이면 최소한 "가장 가까운" 자리가 나오게 한다.
      */
-    private int seatScore(Seat seat, List<String> access, List<String> prefs, int targetRow) {
+    private int seatScore(Seat seat, List<String> access, List<String> prefs, int targetRow, String busGrade) {
         boolean explicitPositionGiven = prefs.contains("FRONT") || prefs.contains("MIDDLE") || prefs.contains("BACK");
+        boolean isPremium = busGrade != null && busGrade.contains("프리미엄");
         int score = 0;
 
         if (!explicitPositionGiven && access.contains("WALKING_DIFFICULTY") && seat.position().equals("FRONT")) score += 15;
         if (access.contains("WALKING_DIFFICULTY") && seat.side().equals("AISLE")) score += 8;
         if (!explicitPositionGiven && access.contains("MOTION_SICKNESS") && seat.position().equals("MIDDLE")) score += 12;
         if (!explicitPositionGiven && access.contains("ELDERLY_CARE") && seat.position().equals("FRONT")) score += 10;
-        if (!explicitPositionGiven && access.contains("PREGNANCY") && seat.position().equals("FRONT")) score += 15;
-        if (access.contains("PREGNANCY") && seat.side().equals("AISLE")) score += 8;
-        if (!explicitPositionGiven && access.contains("INFANT_CARE") && seat.position().equals("FRONT")) score += 10;
+        // 임산부는 앞쪽 위치보다 화장실 접근·승하차가 쉬운 통로 쪽 좌석을 준다 (프리미엄 등급은
+        // 아래 1열 창가석 규칙이 우선한다).
+        if (access.contains("PREGNANCY") && seat.side().equals("AISLE")) score += 15;
+        // 프리미엄 등급은 임산부라면 위 일반 배려보다도 1열 창가석("C" 좌석)을 특히 우선한다.
+        if (!explicitPositionGiven && !prefs.contains("AISLE") && isPremium && access.contains("PREGNANCY")
+                && seat.row() == 1 && seat.seatNo().endsWith("C")) {
+            score += 25;
+        }
         if (!explicitPositionGiven && access.contains("VISUAL_IMPAIRMENT") && seat.position().equals("FRONT")) score += 15;
         if (access.contains("VISUAL_IMPAIRMENT") && seat.side().equals("AISLE")) score += 8;
 
@@ -580,8 +586,9 @@ public class SeatRecommendService {
     }
 
     /** seatScore와 반드시 같은 조건으로 유지해야 하는 사유 문구 목록 */
-    private List<String> seatReasons(Seat seat, List<String> access, List<String> prefs) {
+    private List<String> seatReasons(Seat seat, List<String> access, List<String> prefs, String busGrade) {
         boolean explicitPositionGiven = prefs.contains("FRONT") || prefs.contains("MIDDLE") || prefs.contains("BACK");
+        boolean isPremium = busGrade != null && busGrade.contains("프리미엄");
         List<String> reasons = new ArrayList<>();
 
         if (!explicitPositionGiven && access.contains("WALKING_DIFFICULTY") && seat.position().equals("FRONT")) {
@@ -596,14 +603,12 @@ public class SeatRecommendService {
         if (!explicitPositionGiven && access.contains("ELDERLY_CARE") && seat.position().equals("FRONT")) {
             reasons.add("승하차가 편한 앞쪽 좌석입니다.");
         }
-        if (!explicitPositionGiven && access.contains("PREGNANCY") && seat.position().equals("FRONT")) {
-            reasons.add("임산부분이시라 승하차 편한 앞쪽 좌석입니다.");
-        }
         if (access.contains("PREGNANCY") && seat.side().equals("AISLE")) {
             reasons.add("화장실 이용이 편한 통로 쪽 좌석입니다.");
         }
-        if (!explicitPositionGiven && access.contains("INFANT_CARE") && seat.position().equals("FRONT")) {
-            reasons.add("아기와 함께 타셔서 기사님·승무원 도움을 받기 편한 앞쪽 좌석입니다.");
+        if (!explicitPositionGiven && !prefs.contains("AISLE") && isPremium && access.contains("PREGNANCY")
+                && seat.row() == 1 && seat.seatNo().endsWith("C")) {
+            reasons.add("임산부분이시라 프리미엄 1열 창가 좌석으로 편안하게 준비했습니다.");
         }
         if (!explicitPositionGiven && access.contains("VISUAL_IMPAIRMENT") && seat.position().equals("FRONT")) {
             reasons.add("승무원 도움을 받기 편한 앞쪽 좌석입니다.");

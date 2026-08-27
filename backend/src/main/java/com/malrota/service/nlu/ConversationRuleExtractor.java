@@ -22,6 +22,13 @@ public class ConversationRuleExtractor {
             .sorted(Comparator.comparingInt(String::length).reversed())
             .map(Pattern::quote)
             .collect(Collectors.joining("|"));
+    // 복수 터미널 도시(서울/대구/대전/광주 등)는 도시명 자체가 어느 터미널의 별칭도 아니라서
+    // TERMINALS에 안 잡힌다. "서울 말고 대구로"처럼 세부 터미널 없이 도시명만으로 정정하는
+    // 표현도 잡으려면 CORRECTION/REJECTED 패턴에서만 도시명까지 별도로 인정해야 한다.
+    private static final String CITIES = TagoClient.allCities().stream()
+            .sorted(Comparator.comparingInt(String::length).reversed())
+            .map(Pattern::quote)
+            .collect(Collectors.joining("|"));
 
     private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(?:출발(?:지)?[:\\s]*)?(" + TERMINALS + ")\\s*(?:에서|서|발)");
     // "으로"/"로" 조사는 받침 유무에 따라 형태가 다르다("천안고속으로", "동대구로") — "로"만 인정하면
@@ -34,13 +41,13 @@ public class ConversationRuleExtractor {
     // "대전청사 말고 대전종합으로", "서대구 아니라 동대구로"처럼 이미 확정한 터미널을 다른 터미널로
     // 바꿔달라는 정정 표현. "말고" 앞쪽(정정 대상)은 STT가 못 알아듣게 받아써도(예: "서대구"를
     // "선대 후"로) 상관없이, "말고" 뒤에 오는 원하는 터미널명만 정확히 잡으면 된다.
-    private static final Pattern CORRECTION_PATTERN = Pattern.compile("(?:말고|아니라|아니고)\\s*(" + TERMINALS + ")");
+    private static final Pattern CORRECTION_PATTERN = Pattern.compile("(?:말고|아니라|아니고)\\s*(" + TERMINALS + "|" + CITIES + ")");
     // "말고" 앞쪽(정정 대상)이 등록된 터미널명으로 알아들어졌을 때는 그 터미널이 속한 도시로 출발/
     // 도착 중 어느 쪽을 바꿀지 확실하게 판단할 수 있다 — "광주종합 말고 동대구로"처럼 아예 다른
     // 도시로 통째로 바꾸는 경우(새 터미널의 도시가 기존 출발/도착 어느 쪽과도 같은 도시가 아님)에도
     // 정확히 도착지를 찾아낼 수 있다. 인식이 안 되면(예: "선대 후") null로 두고, 호출한 쪽이 "말고"
     // 뒤쪽 터미널의 도시를 기존 출발/도착과 비교하는 방식으로 대신 판단한다.
-    private static final Pattern REJECTED_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:말고|아니라|아니고)");
+    private static final Pattern REJECTED_PATTERN = Pattern.compile("(" + TERMINALS + "|" + CITIES + ")\\s*(?:말고|아니라|아니고)");
     private static final Pattern GENERIC_DEP_PATTERN = Pattern.compile("([가-힣]{2,})(?:\\s*에서|(?<!에)서|발)(?![가-힣])");
     // 도착지 캡처는 반드시 예약 수량자({2,}?)로 써야 한다 — "서울로 가는"처럼 조사 "로"/"에"가 지명에
     // 바로 붙으면, 뒤쪽 (?:로|에)? 가 있어도 없어도 되는 선택 그룹이라 탐욕적(greedy) 캡처가 "로"까지
@@ -65,7 +72,9 @@ public class ConversationRuleExtractor {
     private static final Pattern TIME_PATTERN = Pattern.compile(
             "(새벽|아침|낮|점심|저녁|밤|심야|오전|오후)?\\s*(\\d{1,2}|열두|열한|다섯|여섯|일곱|여덟|아홉|한|두|세|네|열)\\s*시\\s*(?:(\\d{1,2})\\s*분|반)?");
     // "30분 뒤"의 "분"은 시간 단위이지 탑승 인원이 아니다 — 부정형 전방탐색으로 뒤/후가 붙은 "분"은 제외한다.
-    private static final Pattern PASSENGER_PATTERN = Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|식구|분(?!\\s*(?:뒤|후)))");
+    // 앞에 한글 음절이 이어지면(예: "편안한") 순우리말 수사가 아니라 다른 단어의 끝 글자일 뿐이다 —
+    // "편안한 자리"가 "한 자리"(1명)로 오인되던 실제 보고 사례. 부정 전방탐색으로 그 경우를 막는다.
+    private static final Pattern PASSENGER_PATTERN = Pattern.compile("(?<![가-힣])(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|식구|분(?!\\s*(?:뒤|후)))");
 
     public RuleParse extract(String text, LocalDateTime baseDateTime) {
         String input = text == null ? "" : text.trim();
@@ -395,6 +404,13 @@ public class ConversationRuleExtractor {
         // "뒷쪽"도 표준 표기 "뒤쪽"의 흔한 오기(사이시옷을 뒷자리/뒷좌석에서 유추)라 함께 받는다.
         if (mentionedAndNotRejected(text, "창가")) result.add("WINDOW");
         if (mentionedAndNotRejected(text, "통로")) result.add("AISLE");
+        // "햇빛이 안 들어오는/없는" 자리는 창가를 피하고 싶다는 뜻이라 통로로, 반대로 "햇빛 잘 드는/
+        // 볕 좋은" 자리는 창가로 이어진다. "햇빛"/"볕" 단어 자체는 방향이 없어 부정 표현 유무로 가른다.
+        boolean dislikesSun = List.of("햇빛이 안", "햇빛 안", "햇빛이 없는", "햇빛 없는", "햇빛이 싫어", "햇빛 싫어",
+                "볕이 안", "볕 안", "볕이 싫어", "볕 싫어", "그늘").stream().anyMatch(text::contains);
+        boolean likesSun = !dislikesSun && List.of("햇빛", "볕", "양지").stream().anyMatch(text::contains);
+        if (dislikesSun && !result.contains("AISLE")) result.add("AISLE");
+        if (likesSun && !result.contains("WINDOW")) result.add("WINDOW");
         if (List.of("앞쪽", "앞자리", "앞좌석").stream().anyMatch(k -> mentionedAndNotRejected(text, k))) result.add("FRONT");
         if (mentionedAndNotRejected(text, "중간")) result.add("MIDDLE");
         if (List.of("뒤쪽", "뒷쪽", "뒷자리", "뒷좌석").stream().anyMatch(k -> mentionedAndNotRejected(text, k))) result.add("BACK");
@@ -415,9 +431,6 @@ public class ConversationRuleExtractor {
         }
         if (List.of("임산부", "임신", "만삭", "배가 불러").stream().anyMatch(text::contains)) {
             result.add("PREGNANCY");
-        }
-        if (List.of("아기", "유아", "젖먹이", "신생아", "돌쟁이").stream().anyMatch(text::contains)) {
-            result.add("INFANT_CARE");
         }
         if (List.of("시각장애", "안내견", "앞이 안 보", "앞이 잘 안 보").stream().anyMatch(text::contains)) {
             result.add("VISUAL_IMPAIRMENT");
@@ -514,7 +527,8 @@ public class ConversationRuleExtractor {
     }
 
     private boolean hasSeatPreferenceExpression(String text) {
-        return List.of("창가", "통로", "앞쪽", "앞자리", "앞좌석", "중간", "뒤쪽", "뒷쪽", "뒷자리", "뒷좌석", "혼자").stream().anyMatch(text::contains);
+        return List.of("창가", "통로", "앞쪽", "앞자리", "앞좌석", "중간", "뒤쪽", "뒷쪽", "뒷자리", "뒷좌석", "혼자",
+                "햇빛", "볕", "그늘", "양지").stream().anyMatch(text::contains);
     }
 
     private boolean hasAccessibilityExpression(String text) {

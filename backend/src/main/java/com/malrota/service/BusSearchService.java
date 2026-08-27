@@ -40,25 +40,61 @@ public class BusSearchService {
         // 날짜 포맷 변환 (2026-08-24 → 20260824)
         String date = request.date().replace("-", "");
 
-        // 운행편 조회 후 등급 필터링 및 시간 조건 정렬
+        // 운행편 조회 후 등급 필터링
         List<BusSchedule> schedules = tagoClient.searchBuses(depId, arrId, date);
-        List<BusSchedule> filtered = schedules.stream()
+        List<BusSchedule> gradeFiltered = schedules.stream()
                 .filter(schedule -> matchesGrade(schedule, request.busGradePreference()))
-                .filter(schedule -> isWithinRequestedTimeWindow(schedule, request))
-                .sorted(scheduleComparator(request))
                 .toList();
-        return filtered;
+
+        // 정확한 시각/등급 조건과 시간 조건 정렬
+        BusSearchRequest effective = withEffectiveDepartureTime(gradeFiltered, request);
+        return gradeFiltered.stream()
+                .filter(schedule -> isWithinRequestedTimeWindow(schedule, effective))
+                .sorted(scheduleComparator(effective))
+                .toList();
     }
-    /** 버스 3개 추천 (가장 가까운 시각 / 가장 저렴 / 근처 시각) */
+
+    /**
+     * 첫차/막차는 정확한 시각을 말한 게 아니라서 request.departureTime()이 비어 있다. 그 상태로
+     * 두면 이후 시간창 필터링/거리 정렬이 전부 무력화되어(항상 통과) "막차"를 골라도 낮 시간대의
+     * 아무 저렴한 버스가 추천에 섞여 나온다. 그날 실제로 존재하는 가장 이르거나 늦은 운행편의
+     * 시각을 "요청 시각"으로 채워 넣어, 이후 로직이 그 시각 근처로만 추천을 좁히게 만든다.
+     */
+    private BusSearchRequest withEffectiveDepartureTime(List<BusSchedule> gradeFilteredSchedules, BusSearchRequest request) {
+        if (hasText(request.departureTime())) return request;
+        boolean isFirst = "FIRST".equalsIgnoreCase(request.servicePreference());
+        boolean isLast = "LAST".equalsIgnoreCase(request.servicePreference());
+        if (!isFirst && !isLast) return request;
+
+        Comparator<BusSchedule> byTime = Comparator.comparing(this::departureTime);
+        BusSchedule anchor = gradeFilteredSchedules.stream()
+                .filter(schedule -> !departureTime(schedule).equals(LocalTime.MAX))
+                .reduce((a, b) -> isLast
+                        ? (byTime.compare(a, b) >= 0 ? a : b)
+                        : (byTime.compare(a, b) <= 0 ? a : b))
+                .orElse(null);
+        if (anchor == null) return request;
+
+        return new BusSearchRequest(request.departure(), request.arrival(), request.date(),
+                departureTime(anchor).toString(), request.timePreference(),
+                request.servicePreference(), request.busGradePreference());
+    }
+
+    /** 버스 2개 추천 (가장 저렴 / 근처 시각) */
     public List<BusRecommendation> recommend(BusSearchRequest request) {
         List<BusSchedule> schedules = search(request); // 조회+정렬 재활용
         List<BusRecommendation> result = new ArrayList<>();
         if (schedules.isEmpty()) return result;
 
-        // 1. 가장 맞는 시각 (정렬 결과 첫 번째)
+        // search()가 내부적으로 정한 "요청 시각"(정확한 시각, 또는 첫차/막차의 실제 시각)을
+        // 아래 "요청 시각 뒤 버스" 판단에도 동일하게 써야 한다 — 검색된 목록엔 이미 그 시각 근처의
+        // 후보만 남아 있으므로, 그 시각을 갖는 버스가 여전히 포함돼 있어 다시 계산해도 안전하다.
+        BusSearchRequest effective = withEffectiveDepartureTime(schedules, request);
+
+        // 정렬 결과 첫 번째(요청 시각과 가장 가까운 버스)는 화면에 별도 카드로 보여주지 않고,
+        // 아래 "최저가"/"다른 시간" 후보가 요청 시각 뒤로 몰리지 않게 걸러내는 기준으로만 쓴다.
         BusSchedule best = schedules.get(0);
-        result.add(new BusRecommendation(best, "말씀하신 시간과 가장 가까운 버스입니다.", "추천 시간"));
-        boolean laterBusAlreadyIncluded = isAfterRequestedTime(best, request);
+        boolean laterBusAlreadyIncluded = isAfterRequestedTime(best, effective);
         boolean laterBusBeforeCheapest = laterBusAlreadyIncluded;
 
         // 2. 가장 저렴한 버스
@@ -67,18 +103,18 @@ public class BusSearchService {
         BusSchedule cheapest = schedules.stream()
                 .filter(schedule -> !isSameBus(schedule, best))
                 // 추천 목록에는 요청 시각 뒤 버스를 최대 한 대만 넣고, 나머지는 이전 시간대로 구성한다.
-                .filter(schedule -> !laterBusBeforeCheapest || !isAfterRequestedTime(schedule, request))
+                .filter(schedule -> !laterBusBeforeCheapest || !isAfterRequestedTime(schedule, effective))
                 .min(Comparator.comparingInt(BusSchedule::charge))
                 .orElse(null);
         if (cheapest != null) {
             result.add(new BusRecommendation(cheapest, "가장 저렴한 버스입니다.", "최저가"));
-            laterBusAlreadyIncluded = isAfterRequestedTime(cheapest, request);
+            laterBusAlreadyIncluded = isAfterRequestedTime(cheapest, effective);
         }
 
         // 3. 근처 시각 (1,2와 겹치지 않는 다음 버스)
         for (BusSchedule s : schedules) {
             if (!isSameBus(s, best) && !isSameBus(s, cheapest)
-                    && (!laterBusAlreadyIncluded || !isAfterRequestedTime(s, request))) {
+                    && (!laterBusAlreadyIncluded || !isAfterRequestedTime(s, effective))) {
                 result.add(new BusRecommendation(s, "비슷한 시간대의 다른 버스입니다.", "다른 시간"));
                 break;
             }

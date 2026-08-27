@@ -46,9 +46,8 @@ class ConversationRuleExtractorTest {
     }
 
     @Test
-    void recognizes_pregnancy_infant_and_visual_impairment_accessibility_needs() {
+    void recognizes_pregnancy_and_visual_impairment_accessibility_needs() {
         assertThat(extractor.extract("임산부라 좌석 부탁드려요", base).accessibilityNeeds()).containsExactly("PREGNANCY");
-        assertThat(extractor.extract("신생아 데리고 타요", base).accessibilityNeeds()).containsExactly("INFANT_CARE");
         assertThat(extractor.extract("시각장애가 있어서 안내견과 함께 타요", base).accessibilityNeeds()).containsExactly("VISUAL_IMPAIRMENT");
     }
 
@@ -202,6 +201,17 @@ class ConversationRuleExtractorTest {
     }
 
     @Test
+    void extracts_a_correction_expressed_only_as_bare_city_names_without_a_specific_terminal() {
+        // 실제 보고된 사례: "서울 말고 대구로 할께"처럼 세부 터미널 없이 도시명만으로 정정하면
+        // 아무것도 못 알아듣고 조용히 무시했다 — "서울"/"대구"는 터미널이 여럿이라 도시명 자체가
+        // 어느 터미널의 별칭으로도 등록돼 있지 않기 때문. 도시명만으로도 정정을 잡아내야 한다.
+        var result = extractor.extract("서울 말고 대구로 할께", base);
+
+        assertThat(result.rejectedTerminal()).isEqualTo("서울");
+        assertThat(result.correctionTerminal()).isEqualTo("대구");
+    }
+
+    @Test
     void rejected_time_before_malgo_does_not_leak_in_alongside_the_correction() {
         // 실제 보고된 사례: "저녁 일곱시 말고 첫차로 부탁해"에서 거부된 "저녁 일곱시"가 "첫차"와
         // 동시에 추출돼 정확한 시각(19:00)과 servicePreference=FIRST가 모순되게 함께 잡혔다.
@@ -246,11 +256,34 @@ class ConversationRuleExtractorTest {
     }
 
     @Test
+    void infers_aisle_or_window_from_sunlight_preference() {
+        // 실제로 보고된 사고: "햇빛이 안들어오는 자리로 해줘"가 통로(AISLE)가 아니라 창가(WINDOW)로
+        // 잘못 채택됐다 — "햇빛"이라는 단어 자체만 보고 부정 표현("안"/"싫어")을 놓쳤기 때문이다.
+        assertThat(extractor.extract("햇빛이 안들어오는 자리로 해줘", base).seatPreferences())
+                .containsExactly("AISLE");
+        assertThat(extractor.extract("햇빛 싫어서 그늘진 자리로 주세요", base).seatPreferences())
+                .containsExactly("AISLE");
+        assertThat(extractor.extract("햇빛 잘 드는 자리로 주세요", base).seatPreferences())
+                .containsExactly("WINDOW");
+    }
+
+    @Test
     void corrects_passenger_count_stated_twice_in_the_same_sentence() {
         // "3명 말고 2명이요"처럼 한 문장 안에서 인원수를 정정하면, find()가 첫 번째 값(3명)만
         // 잡아서 정정된 값(2명)이 무시되던 문제.
         assertThat(extractor.extract("3명 말고 2명이요", base).passengers()).isEqualTo(2);
         assertThat(extractor.extract("두 명 말고 세 명으로 바꿔줘", base).passengers()).isEqualTo(3);
+    }
+
+    @Test
+    void does_not_mistake_the_trailing_syllable_of_an_unrelated_word_for_a_passenger_count() {
+        // 실제로 보고된 사고: "편안한 자리로 해줘"에서 "편안한"의 끝 글자 "한"이 순우리말 수사
+        // "한"(1명)으로 오인되고 뒤이은 "자리"와 엮여 "한 자리"로 잡혀, 세션에 이미 있던 인원수
+        // (예: 3명)가 아무도 인원을 언급하지 않았는데도 1명으로 조용히 바뀌어 버렸다.
+        var result = extractor.extract("임산부가 있어서 편안한 자리로 해주고 뒤쪽 자리로 줘", base);
+
+        assertThat(result.passengers()).isZero();
+        assertThat(result.passengerMentioned()).isFalse();
     }
 
     @Test

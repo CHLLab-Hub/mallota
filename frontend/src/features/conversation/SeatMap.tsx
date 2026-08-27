@@ -149,7 +149,18 @@ export function SeatMap({ seats, recommendedNo, alternativeNos, selectedNo, onSe
       <h3>좌석 배치도</h3>
       <div style={{ textAlign: 'right', marginBottom: '8px', color: '#64748b' }}>🚍 앞 (운전석)</div>
 
-      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', alignItems: 'center' }}>
+      {/* 줄 수가 많으면 화면이 다른 창보다 훨씬 길어지므로, 배치도만 따로 스크롤되게 높이를 제한한다 */}
+      <div style={{
+        display: 'flex',
+        flexDirection: 'column',
+        gap: '8px',
+        alignItems: 'center',
+        maxHeight: '240px',
+        overflowY: 'auto',
+        padding: '4px',
+        border: '1px solid #e2e8f0',
+        borderRadius: '12px',
+      }}>
         {sortedRows.map(([rowNum, rowSeats]) => {
           // column 위치로 좌석 찾기 (없으면 빈 칸 = 통로)
           const byColumn = new Map<number, Seat>()

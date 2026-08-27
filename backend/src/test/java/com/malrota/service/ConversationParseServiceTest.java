@@ -129,6 +129,42 @@ class ConversationParseServiceTest {
     }
 
     @Test
+    void last_bus_correction_clears_a_previously_set_time_of_day_preference() {
+        // 실제로 보고된 사고: 세션에 이미 "오후"(timePreference=AFTERNOON) 시간대가 남아있는 상태에서
+        // "아니다 막차로 할래"라고 정정하면, departureTime은 지워지는데 timePreference는 그대로
+        // 남아 있어서 검색 단계가 "오후 안에서 가장 늦은 버스"만 찾아버려 진짜 막차가 아닌
+        // 엉뚱한 시각이 추천됐다. 첫차/막차는 시간대와 무관한 절대적인 의미이므로 함께 지워야 한다.
+        ConversationSession session = new ConversationSession("s1");
+        session.mergeConditions("서울", "대전", "2026-08-28", "15:00", "AFTERNOON", "ANY", "ANY",
+                1, session.getSeatPreferences(), session.getAccessibilityNeeds(), null);
+
+        ConversationParseResponse r = service.parse(new ConversationParseRequest("아니다 막차로 할래", "s1"), session);
+
+        assertThat(r.servicePreference()).isEqualTo("LAST");
+        assertThat(r.departureTime()).isNull();
+        assertThat(r.timePreference()).isEqualTo("ANY");
+    }
+
+    @Test
+    void acknowledges_a_service_preference_change_even_while_an_unrelated_question_is_pending() {
+        // 실제로 보고된 사고: 출발지 도시("대구")가 아직 세부 터미널 되묻기 중인 상태에서 "첫차로
+        // 부탁해"라고 말하면, servicePreference는 제대로 FIRST로 바뀌는데도 응답 문구는 여전히
+        // "대구 어느 터미널로..."만 그대로 나가서 사용자는 자신의 말이 반영됐는지 알 수 없었다.
+        ConversationSession session = new ConversationSession("s1");
+        session.mergeConditions("대구", "서울", "2026-08-28", null, "ANY", "ANY", "ANY",
+                1, session.getSeatPreferences(), session.getAccessibilityNeeds(),
+                "대구 어느 터미널로 원하시나요? 동대구, 서대구, 대구북부, 대구서부 중 편하신 곳을 말씀해 주세요.");
+
+        ConversationParseResponse r = service.parse(
+                new ConversationParseRequest("아니다 내일 아침 첫차로 부탁해", "s1"), session);
+
+        assertThat(r.servicePreference()).isEqualTo("FIRST");
+        assertThat(r.timePreference()).isEqualTo("MORNING");
+        assertThat(r.clarificationPrompt()).startsWith("네, 첫차로 준비할게요.");
+        assertThat(r.clarificationPrompt()).doesNotContain("죄송해요");
+    }
+
+    @Test
     void recognizes_common_mishearings_of_cheotcha_as_first_bus() {
         // "저차", "쳐차"는 음성 인식이 "첫차"를 잘못 받아적은 실제 사용자 보고 사례.
         ConversationSession session = new ConversationSession("s1");
@@ -419,5 +455,23 @@ class ConversationParseServiceTest {
         assertThat(result.arrival()).isEqualTo("부산종합");
         // 정정이 조용히 반영되고 넘어가면 사용자는 실제로 반영됐는지 알 수 없으므로 확인 문구를 붙인다.
         assertThat(result.clarificationPrompt()).contains("센트럴시티");
+    }
+
+    @Test
+    void corrects_departure_expressed_only_as_bare_city_names_without_a_specific_terminal() {
+        // 실제로 보고된 사고: "서울 말고 대구로 할께"처럼 세부 터미널 없이 도시명만으로 정정하면
+        // 아무 반응 없이 조용히 무시됐다. "서울"/"대구"는 도시명 자체가 등록된 터미널 별칭이 아니라서
+        // TagoClient.cityOf가 null을 반환해, 이미 확실히 추출된 correctionTerminal/rejectedTerminal이
+        // 있어도 어느 방향(출발/도착)인지 판단하는 단계에서 조용히 실패했었다.
+        ConversationSession session = new ConversationSession("s1");
+        session.mergeConditions("서울", "대전", "2026-09-10", null, "ANY", "ANY", "ANY",
+                1, session.getSeatPreferences(), session.getAccessibilityNeeds(), null);
+
+        ConversationParseResponse result = service.parse(
+                new ConversationParseRequest("서울 말고 대구로 할께", "s1"), session);
+
+        assertThat(result.departure()).isEqualTo("대구");
+        assertThat(result.arrival()).isEqualTo("대전");
+        assertThat(result.clarificationPrompt()).contains("대구");
     }
 }

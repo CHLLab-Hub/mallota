@@ -15,8 +15,6 @@ export function SeatPage() {
   } = useAppState()
   const [selecting, setSelecting] = useState(false)
   const [seatHint, setSeatHint] = useState<string | null>(null)
-  // 묶어서(나란히/앞뒤) 앉을 자리를 고르는 중인지, 각자 따로 앉을 자리를 한 명씩 고르는 중인지
-  const [separateMode, setSeparateMode] = useState(false)
   const [manualPicks, setManualPicks] = useState<Seat[]>([])
 
   function appSay(t: string) {
@@ -32,15 +30,14 @@ export function SeatPage() {
   // 묶음을 못 찾아 좌석이 1개만 돌아온 경우에도 인원수만큼 고르도록 한다.
   const requiredSeatCount = Math.max(passengers, 1)
 
-  function startSelecting(separate: boolean) {
+  function startSelecting() {
     setSelecting(true)
-    setSeparateMode(separate)
     setManualPicks([])
     setSeatHint(null)
     setSelectedSeatNo(null)
   }
 
-  // 두 분 이상이면 좌석을 바꿀 때도 함께 앉으실 나머지 자리까지 같은 모양으로 골라야 한다
+  // 음성으로 창가/통로를 고르는 경우에는 함께 앉으실 나머지 자리까지 같은 모양으로 골라준다.
   function selectSuggestedGroupFrom(clicked: Seat) {
     if (!hasGroup) {
       setSelectedSeatNo(clicked.seatNo)
@@ -49,8 +46,8 @@ export function SeatPage() {
     }
     const group = findSeatGroup(seat?.allSeats ?? [], clicked, groupSize)
     if (!group) {
-      // 이 버스에 애초에 나란히/앞뒤로 붙은 자리가 하나도 없으면 "따로따로 앉기" 모드로 바꾸라고 안내
-      setSeatHint(`${clicked.seatNo}번은 함께 앉으실 나머지 자리가 없어요. 다른 자리를 눌러보시거나, "따로따로 앉을 자리 고르기"를 이용해 주세요.`)
+      // 이 버스에 애초에 나란히/앞뒤로 붙은 자리가 하나도 없으면 직접 선택 모드로 안내
+      setSeatHint(`${clicked.seatNo}번은 함께 앉으실 나머지 자리가 없어요. "다른 좌석 선택하기"로 한 분씩 골라주세요.`)
       return false
     }
     setSelectedSeatNo(formatSeats(group))
@@ -74,7 +71,7 @@ export function SeatPage() {
     })
   }
 
-  const readyToConfirm = !selecting || !separateMode || manualPicks.length === requiredSeatCount
+  const readyToConfirm = !selecting || manualPicks.length === requiredSeatCount
 
   function finalSeatNoFor(clicked: Seat): string {
     if (!hasGroup) return clicked.seatNo
@@ -129,8 +126,6 @@ export function SeatPage() {
     )
   }
 
-  const finalSeatNo = selectedSeatNo ?? (hasGroup ? formatSeats(groupSeats) : seat.bestSeat.seatNo)
-
   return (
     <div className="phone-frame">
       <header className="home-header">
@@ -142,33 +137,15 @@ export function SeatPage() {
       <h1 className="home-title" style={{ fontSize: '1.4rem' }}>좌석 선택</h1>
 
       <div className="home-body">
-        <p style={{ fontSize: '1.1rem', fontWeight: 700 }}>
-          추천 좌석: <span style={{ color: '#f07f21' }}>{finalSeatNo}</span>
-          {/* 붙어있는 연석일 수도, 구역만 맞춰 따로 배정된 자리일 수도 있어 "연석"이라 단정하지 않는다 */}
-          {hasGroup && <span style={{ fontSize: '0.9rem', color: '#58665f' }}> ({groupSize}자리 배정)</span>}
-        </p>
-        <ul>
-          {seat.reasons.map((r, i) => (<li key={i}>{r}</li>))}
-        </ul>
-
         {!selecting ? (
-          <div style={{ display: 'flex', gap: '8px', marginBottom: '12px', flexWrap: 'wrap' }}>
-            <button type="button" className="send-button" onClick={() => startSelecting(false)}>
-              다른 좌석 선택하기
-            </button>
-            {hasGroup && (
-              <button type="button" className="send-button" onClick={() => startSelecting(true)}>
-                따로따로 앉을 자리 고르기
-              </button>
-            )}
-          </div>
+          <button type="button" className="send-button" onClick={startSelecting} style={{ marginBottom: '12px' }}>
+            다른 좌석 선택하기
+          </button>
         ) : (
           <p style={{ color: '#f07f21' }}>
-            {separateMode
+            {requiredSeatCount > 1
               ? `${requiredSeatCount}명이 각자 앉으실 자리를 한 분씩 눌러주세요.`
-              : hasGroup
-                ? `앉고 싶은 자리를 눌러주세요. 나머지 ${groupSize}자리가 함께 선택됩니다.`
-                : '앉고 싶은 좌석을 눌러주세요.'}
+              : '앉고 싶은 좌석을 눌러주세요.'}
           </p>
         )}
 
@@ -179,7 +156,7 @@ export function SeatPage() {
           recommendedNo={hasGroup ? formatSeats(groupSeats) : seat.bestSeat.seatNo}
           alternativeNos={seat.tiedAlternativeSeats.map((s) => s.seatNo)}
           selectedNo={selectedSeatNo ?? undefined}
-          onSelect={selecting ? (s) => (separateMode ? toggleManualPick(s) : selectSuggestedGroupFrom(s)) : undefined}
+          onSelect={selecting ? toggleManualPick : undefined}
         />
 
         <button

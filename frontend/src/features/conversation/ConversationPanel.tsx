@@ -5,6 +5,56 @@ import { useAppState } from './AppState'
 import { VoicePanel, speak } from './VoicePanel'
 import type { ConversationSessionResult } from './types'
 
+const SEAT_LABELS: Record<string, string> = {
+  WINDOW: '창가', AISLE: '통로', FRONT: '앞쪽', MIDDLE: '중간', BACK: '뒤쪽', ADJACENT: '연석',
+}
+const GRADE_LABELS: Record<string, string> = { EXCELLENT: '우등', PREMIUM: '프리미엄', GENERAL: '일반' }
+const ACCESS_LABELS: Record<string, string> = {
+  WALKING_DIFFICULTY: '보행 불편', ELDERLY_CARE: '어르신 동반', MOTION_SICKNESS: '멀미',
+  PREGNANCY: '임산부', VISUAL_IMPAIRMENT: '시각장애',
+}
+
+function formatDateKorean(dateStr: string): string {
+  const [, m, d] = dateStr.split('-').map(Number)
+  return `${m}월 ${d}일`
+}
+
+function formatTimeKorean(timeStr: string): string {
+  const [h, m] = timeStr.split(':').map(Number)
+  const period = h < 12 ? '오전' : '오후'
+  const hour12 = h % 12 === 0 ? 12 : h % 12
+  return m === 0 ? `${period} ${hour12}시` : `${period} ${hour12}시 ${m}분`
+}
+
+// 버스 목록으로 넘어가기 직전에, 지금까지 모인 조건을 한 번에 정리해서 들려준다 —
+// 여러 턴에 걸쳐 말한 조건이 실제로 어떻게 반영됐는지 사용자가 한눈에 확인할 수 있게.
+function buildConditionSummary(
+  session: ConversationSessionResult, dep: string, arr: string, date: string, departureTime: string | null,
+): string {
+  const parts: string[] = [`${dep}에서 ${arr}까지`, formatDateKorean(date)]
+
+  if (departureTime) {
+    parts.push(formatTimeKorean(departureTime))
+  } else if (session.servicePreference === 'FIRST') {
+    parts.push('첫차')
+  } else if (session.servicePreference === 'LAST') {
+    parts.push('막차')
+  }
+
+  parts.push(`${session.passengers}명`)
+
+  const grade = session.busGradePreference ? GRADE_LABELS[session.busGradePreference] : null
+  if (grade) parts.push(`${grade} 등급`)
+
+  const seatLabels = (session.seatPreferences ?? []).map((s) => SEAT_LABELS[s] ?? s)
+  if (seatLabels.length > 0) parts.push(`${seatLabels.join('/')} 선호`)
+
+  const accessLabels = (session.accessibilityNeeds ?? []).map((a) => ACCESS_LABELS[a] ?? a)
+  if (accessLabels.length > 0) parts.push(accessLabels.join('/'))
+
+  return `지금까지 확인한 조건이에요: ${parts.join(', ')}. 이 조건으로 버스를 찾아볼게요.`
+}
+
 export function ConversationPanel() {
   const {
     sessionId, setSessionId,
@@ -71,8 +121,11 @@ export function ConversationPanel() {
           if (recs.length === 0) {
             appSay('해당 조건의 버스를 찾지 못했습니다.')
           } else {
+            appSay(buildConditionSummary(session, dep, arr, dt, departureTime))
             setRecommendations(recs)
-            setTimeout(() => setScreen('bus'), 800)
+            // 조건 요약을 다 들을 시간을 준 뒤 버스 목록으로 넘어간다 — 곧바로 넘어가면
+            // 버스 목록 화면 자체의 안내 음성이 곧장 겹쳐 들어와 요약이 끊겨 버린다.
+            setTimeout(() => setScreen('bus'), 4000)
           }
         }
       }

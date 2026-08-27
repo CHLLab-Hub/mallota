@@ -158,8 +158,13 @@ public class TagoClient {
         return id == null ? null : ID_TO_NAME_MAP.get(id);
     }
 
-    /** 정식 터미널명이 속한 도시 */
+    /**
+     * 정식 터미널명이 속한 도시. 인자가 이미 도시명 그 자체(예: 세부 터미널이 특정되지 않은 "대구")면
+     * CANONICAL_TO_CITY에 그 이름으로 등록된 터미널이 없어 null이 나오므로, 그 경우엔 자기 자신을
+     * 도시로 반환한다 — "서울 말고 대구로"처럼 도시명만으로 정정할 때도 도시 판단이 되어야 한다.
+     */
     public static String cityOf(String canonicalName) {
+        if (canonicalName != null && CITY_TERMINALS.containsKey(canonicalName)) return canonicalName;
         return CANONICAL_TO_CITY.get(canonicalName);
     }
 
@@ -176,6 +181,15 @@ public class TagoClient {
     /** 등록된 모든 정식 터미널명 + 별칭 (정규식 생성용) */
     public static Set<String> allNamesAndAliases() {
         return TERMINAL_MAP.keySet();
+    }
+
+    /**
+     * 등록된 모든 도시명 (정규식 생성용). 복수 터미널 도시(서울/대구/대전/광주 등)는 도시명 자체가
+     * 어느 터미널의 별칭으로도 등록돼 있지 않아 allNamesAndAliases()에 안 잡힌다 — "서울 말고
+     * 대구로"처럼 세부 터미널 없이 도시명만으로 정정하는 표현을 잡으려면 이 목록이 따로 필요하다.
+     */
+    public static Set<String> allCities() {
+        return CITY_TERMINALS.keySet();
     }
 
     /**
