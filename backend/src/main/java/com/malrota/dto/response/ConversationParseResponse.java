@@ -19,6 +19,7 @@ public record ConversationParseResponse(
     List<String> missingFields,
     String clarificationPrompt,
     boolean wantsEarlierBus,
-    boolean wantsLaterBus
+    boolean wantsLaterBus,
+    boolean routeNotFound // true면 조건이 아니라 출발지-도착지 사이에 직행 노선 자체가 없다는 뜻
 ) {
 }

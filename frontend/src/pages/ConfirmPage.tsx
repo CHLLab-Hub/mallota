@@ -143,7 +143,7 @@ export function ConfirmPage() {
             <div style={{ textAlign: 'center' }}>
               <div style={{ color: '#58665f', fontSize: '0.9rem' }}>도착</div>
               <div style={{ fontSize: '1.3rem', fontWeight: 800 }}>{selectedBus.arrival}</div>
-              <div style={{ color: '#f07f21' }}>{formatTime(selectedBus.arrivalTime)}</div>
+              <div style={{ color: '#f07f21' }}>약 {formatTime(selectedBus.arrivalTime)}</div>
             </div>
           </div>
 

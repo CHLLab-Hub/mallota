@@ -1,6 +1,5 @@
 package com.malrota.controller;
 
-import com.malrota.dto.response.BusRecommendation;
 import com.malrota.dto.response.BusRecommendResponse;
 import com.malrota.dto.request.BusSearchRequest;
 import com.malrota.dto.response.BusSchedule;
@@ -30,8 +29,7 @@ public class BusSearchController {
 
     @PostMapping("/recommend")
     public BusRecommendResponse recommend(@Valid @RequestBody BusSearchRequest request) {
-        List<BusRecommendation> recommendations = busSearchService.recommend(request);
-        boolean routeExists = !recommendations.isEmpty() || busSearchService.hasAnyScheduleBetween(request);
-        return new BusRecommendResponse(recommendations, routeExists);
+        BusSearchService.RecommendResult result = busSearchService.recommendWithRouteInfo(request);
+        return new BusRecommendResponse(result.recommendations(), result.routeExists());
     }
 }

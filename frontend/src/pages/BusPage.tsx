@@ -170,7 +170,7 @@ export function BusPage() {
                 {rec.bus.departure} → {rec.bus.arrival}
               </div>
               <div style={{ fontSize: '1.1rem', color: '#f07f21', marginTop: '6px' }}>
-                {formatTime(rec.bus.departureTime)} 출발 · {formatTime(rec.bus.arrivalTime)} 도착
+                {formatTime(rec.bus.departureTime)} 출발 · 약 {formatTime(rec.bus.arrivalTime)} 도착
               </div>
               <div style={{ fontSize: '1rem', color: '#58665f', marginTop: '4px' }}>
                 {rec.bus.grade} · 1인 {rec.bus.charge.toLocaleString()}원 · <b>총 {totalFare(rec.bus).toLocaleString()}원</b>

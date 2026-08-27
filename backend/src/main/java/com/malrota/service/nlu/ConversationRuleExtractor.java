@@ -97,6 +97,12 @@ public class ConversationRuleExtractor {
         String arrival = null;
         String departure = null;
         String standalone = null;
+        // 등록되지 않은 지명(예: "완도")을 "-(으)로 가는"/"-에서" 같은 도착/출발 문형으로 말했을 때,
+        // isPlausibleTerminal이 조용히 걸러내 버리면 사용자는 아무 반응이 없거나 매번 같은 질문만
+        // 반복되는 걸 보게 된다. 여기 담아 두면 ConversationParseService가 "그 지역은 아직 지원하지
+        // 않는다"고 정직하게 안내할 수 있다.
+        String unrecognizedArrival = null;
+        String unrecognizedDeparture = null;
 
         if (isStandaloneTerminalToken) {
             standalone = wholeInputAsTerminal;
@@ -104,19 +110,32 @@ public class ConversationRuleExtractor {
             // "서울에서 대전으로" 같은 한 문장 출발+도착 구조를 개별 패턴보다 먼저 확인한다.
             Matcher routeMatcher = ROUTE_PATTERN.matcher(input);
             if (routeMatcher.find()) {
-                departure = routeMatcher.group(1);
-                arrival = routeMatcher.group(2);
+                String routeDeparture = routeMatcher.group(1);
+                String routeArrival = routeMatcher.group(2);
+                // 등록되지 않은 지명(예: "완도")이 "-(으)로" 조사와 함께 이 패턴으로 잡혀도 그냥
+                // 통과시키면 안 된다 — 아래 개별 패턴들과 똑같이 검증해서, 미지원 지역이면
+                // unrecognized*로 넘겨 정직하게 안내할 수 있게 한다.
+                if (isPlausibleTerminal(routeDeparture)) departure = routeDeparture;
+                else unrecognizedDeparture = routeDeparture;
+                if (isPlausibleTerminal(routeArrival)) arrival = routeArrival;
+                else unrecognizedArrival = routeArrival;
             } else {
                 arrival = find(ARRIVAL_PATTERN, input);
                 if (arrival == null) {
                     String genericArrival = find(GENERIC_ARR_PATTERN, input);
-                    if (genericArrival != null && isPlausibleTerminal(genericArrival)) arrival = genericArrival;
+                    if (genericArrival != null) {
+                        if (isPlausibleTerminal(genericArrival)) arrival = genericArrival;
+                        else unrecognizedArrival = genericArrival;
+                    }
                 }
 
                 departure = find(DEPARTURE_PATTERN, input);
                 if (departure == null) {
                     String genericDeparture = find(GENERIC_DEP_PATTERN, input);
-                    if (genericDeparture != null && isPlausibleTerminal(genericDeparture)) departure = genericDeparture;
+                    if (genericDeparture != null) {
+                        if (isPlausibleTerminal(genericDeparture)) departure = genericDeparture;
+                        else unrecognizedDeparture = genericDeparture;
+                    }
                 }
             }
 
@@ -188,7 +207,9 @@ public class ConversationRuleExtractor {
                 rejectedTerminal,
                 wantsEarlierBus(input),
                 wantsLaterBus(input),
-                ambiguousMeridiem
+                ambiguousMeridiem,
+                unrecognizedDeparture,
+                unrecognizedArrival
         );
     }
 
@@ -578,7 +599,12 @@ public class ConversationRuleExtractor {
         String rejectedTerminal,
         boolean wantsEarlierBus,
         boolean wantsLaterBus,
-        boolean ambiguousMeridiem
+        boolean ambiguousMeridiem,
+        // 등록되지 않은 지명을 "-에서"/"-(으)로 가는" 문형으로 말했을 때의 원문 그대로 (지원하지
+        // 않는 지역이라고 정직하게 안내하기 위한 용도 — departure/arrival과 달리 등록 여부와
+        // 무관하게 항상 채워진다는 보장이 없는 1회성 신호다).
+        String unrecognizedDeparture,
+        String unrecognizedArrival
     ) {}
 
     private record DateTimeResolution(LocalDate date, LocalTime departureTime) {}

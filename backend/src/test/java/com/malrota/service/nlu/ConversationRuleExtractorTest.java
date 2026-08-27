@@ -11,6 +11,26 @@ class ConversationRuleExtractorTest {
     private final ConversationRuleExtractor extractor = new ConversationRuleExtractor();
 
     @Test
+    void captures_an_unregistered_place_name_stated_as_the_arrival() {
+        // 실제로 보고된 사고: 등록 안 된 지명("완도")을 "-(으)로 가는" 문형으로 말하면
+        // isPlausibleTerminal이 조용히 걸러내 버려서, 사용자는 아무 반응이 없거나 "어디로
+        // 가시나요?"만 계속 반복해서 듣게 됐다. 이젠 그 지명을 unrecognizedArrival에 담아서
+        // ConversationParseService가 "그 지역은 아직 지원하지 않는다"고 알려줄 수 있게 한다.
+        var result = extractor.extract("서울경부에서 완도로 가는 버스", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.arrival()).isNull();
+        assertThat(result.unrecognizedArrival()).isEqualTo("완도");
+    }
+
+    @Test
+    void does_not_flag_a_registered_place_name_as_unrecognized() {
+        var result = extractor.extract("서울경부에서 포항으로 가는 버스", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.arrival()).isNotNull();
+        assertThat(result.unrecognizedArrival()).isNull();
+    }
+
+    @Test
     void keeps_departure_and_arrival_distinct_for_a_full_route_sentence() {
         var result = extractor.extract("서울에서 대전으로 가는 버스 예약해줘", LocalDateTime.of(2026, 8, 24, 10, 0));
 

@@ -103,4 +103,6 @@ export interface ConversationSessionResult {
   // (예: "더 빠른/더 늦은 거 없어?" → 방금 보여준 버스보다 이르거나 늦은 시간을 찾아달라는 요청)
   wantsEarlierBus: boolean
   wantsLaterBus: boolean
+  // 출발지-도착지 사이에 직행 노선 자체가 없다는 1회성 신호 — true면 세션을 초기화해야 한다.
+  routeNotFound: boolean
 }

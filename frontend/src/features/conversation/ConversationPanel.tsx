@@ -87,6 +87,15 @@ export function ConversationPanel() {
 
     try {
       const session: ConversationSessionResult = await parseConversation(sendText, sessionId)
+
+      if (session.routeNotFound) {
+        // 출발지-도착지 사이에 직행 노선 자체가 없는 경우 — 세션에 남겨두면 같은 노선을 계속
+        // 물어보게 되므로, 세션을 초기화해서 다음 발화부터 출발지/도착지를 새로 물어보게 한다.
+        appSay(session.clarificationPrompt ?? '해당 노선을 찾지 못했어요. 다시 어디에서 어디로 가시는지 말씀해 주세요.')
+        setSessionId(null)
+        return
+      }
+
       setSessionId(session.sessionId)
 
       // 서버가 더 물어볼 게 있으면 (clarificationPrompt) → 그걸 물어보기

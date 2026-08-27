@@ -4,12 +4,14 @@ import com.fasterxml.jackson.databind.DeserializationFeature;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.malrota.client.WatsonxClient;
 import com.malrota.domain.ConversationSession;
+import com.malrota.dto.request.BusSearchRequest;
 import com.malrota.dto.request.ConversationParseRequest;
 import com.malrota.dto.response.ConversationParseResponse;
 import com.malrota.service.nlu.ConversationRuleExtractor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import com.malrota.client.TagoClient;
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.format.DateTimeFormatter;
 import java.util.*;
@@ -22,12 +24,15 @@ public class ConversationParseService {
 
     private final WatsonxClient watsonxClient;
     private final ConversationRuleExtractor ruleExtractor;
+    private final BusSearchService busSearchService;
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
-    public ConversationParseService(WatsonxClient watsonxClient, ConversationRuleExtractor ruleExtractor) {
+    public ConversationParseService(WatsonxClient watsonxClient, ConversationRuleExtractor ruleExtractor,
+                                     BusSearchService busSearchService) {
         this.watsonxClient = watsonxClient;
         this.ruleExtractor = ruleExtractor;
+        this.busSearchService = busSearchService;
     }
 
     /** 세션 없는 단일 요청용 파싱 진입점 */
@@ -164,6 +169,27 @@ public class ConversationParseService {
             }
         }
 
+        // [노선 존재 확인] 우리는 직행 노선만 다룬다. 출발/도착이 이번 턴에 막 둘 다 구체적인
+        // 터미널로 확정됐다면, 날짜/인원/좌석까지 다 물어본 뒤에야 "노선이 없다"고 알리면 사용자
+        // 시간만 낭비하게 된다 — 그래서 날짜를 묻기 전, 이 시점에 바로 직행편이 있는지 확인한다.
+        // 이미 예전 턴부터 확정돼 있던 경우(매 턴 반복 조회 방지)는 건너뛰고, "이번 턴에 막
+        // 완성됐을 때"만 한 번 확인한다.
+        String sessionDepartureBefore = sessionValue(session, ConversationSession::getDeparture);
+        String sessionArrivalBefore = sessionValue(session, ConversationSession::getArrival);
+        boolean wasRoutePairAlreadyConcrete = isConcreteTerminal(sessionDepartureBefore) && isConcreteTerminal(sessionArrivalBefore);
+        boolean isRoutePairConcreteNow = isConcreteTerminal(departure) && isConcreteTerminal(arrival);
+        if (isRoutePairConcreteNow && !wasRoutePairAlreadyConcrete) {
+            String referenceDate = LocalDate.now().plusDays(2).toString();
+            BusSearchRequest routeCheckRequest = new BusSearchRequest(departure, arrival, referenceDate);
+            if (!busSearchService.hasAnyScheduleBetween(routeCheckRequest)) {
+                String noRouteMessage = String.format(
+                        "%s에서 %s까지 가는 직행 버스 노선을 찾지 못했어요. 다시 어디에서 어디로 가시는지 말씀해 주세요.",
+                        departure, arrival);
+                return new ConversationParseResponse(intent, departure, arrival, null, null, "ANY", "ANY", "ANY",
+                        1, false, List.of(), false, List.of(), List.of(), noRouteMessage, false, false, true);
+            }
+        }
+
         String date = firstNonBlank(rules.date() == null ? null : rules.date().toString(), sessionValue(session, ConversationSession::getDate), value(llm, ConversationParseResponse::date));
 
         // 정확한 시각과 관련된 두 가지 배타 규칙을 모두 적용한다:
@@ -216,7 +242,8 @@ public class ConversationParseService {
 
         List<String> missing = missingRequired(departure, arrival, date, departureTime, servicePreference);
         String prompt = clarificationPrompt(missing, departure, arrival, passengers, passengerMentioned,
-                seatPreferenceMentioned, timePreference, rules.ambiguousMeridiem());
+                seatPreferenceMentioned, timePreference, rules.ambiguousMeridiem(),
+                rules.unrecognizedDeparture(), rules.unrecognizedArrival());
 
         // 단독 터미널 답변("센트럴시티" 등)이 들어왔지만 지금 되묻고 있는 도시(예: 대전)와 다른
         // 도시(예: 서울) 터미널이라 어디에도 반영되지 못한 경우, "잘 못 알아들었어요"라는 애매한
@@ -276,7 +303,7 @@ public class ConversationParseService {
                 intent, nullIfBlank(departure), nullIfBlank(arrival), nullIfBlank(date),
                 nullIfBlank(departureTime), timePreference, servicePreference, busGradePreference, passengers,
                 passengerMentioned, seatPreferences, seatPreferenceMentioned, accessibilityNeeds,
-                missing, prompt, wantsEarlierBus, wantsLaterBus
+                missing, prompt, wantsEarlierBus, wantsLaterBus, false
         );
     }
 
@@ -289,6 +316,11 @@ public class ConversationParseService {
     private boolean belongsToCity(String terminalOrCity, String city) {
         if (isBlank(terminalOrCity) || isBlank(city)) return false;
         return city.equals(terminalOrCity) || city.equals(TagoClient.cityOf(terminalOrCity));
+    }
+
+    /** 아직 세부 터미널이 안 정해진 복수 터미널 도시명(예: "서울")이 아니라, 구체적인 터미널인지. */
+    private boolean isConcreteTerminal(String value) {
+        return !isBlank(value) && !TagoClient.isMultiTerminalCity(value);
     }
 
     private boolean hasPassengerMention(String text) {
@@ -342,16 +374,25 @@ public class ConversationParseService {
     private String clarificationPrompt(List<String> missing, String departure, String arrival,
                                        int passengers, boolean passengerMentioned,
                                        boolean seatPreferenceMentioned, String timePreference,
-                                       boolean ambiguousMeridiem) {
+                                       boolean ambiguousMeridiem, String unrecognizedDeparture,
+                                       String unrecognizedArrival) {
         // 필수 이동 정보(출발/도착/날짜/시간) 누락 시 질문
         if (!missing.isEmpty()) {
             if (missing.contains("departure") && missing.contains("arrival")) {
                 return "어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.";
             }
             if (missing.contains("departure")) {
+                // 등록되지 않은 지명(예: "완도")을 출발지로 말했다면, "출발지를 말씀해 주세요"만
+                // 반복하는 대신 그 지역을 아직 지원하지 않는다고 정직하게 알려준다.
+                if (unrecognizedDeparture != null) {
+                    return String.format("죄송해요, '%s'는 아직 지원하지 않는 지역이에요. 다른 출발지를 말씀해 주세요.", unrecognizedDeparture);
+                }
                 return (arrival != null && !arrival.isBlank() ? arrival + "행 " : "") + "버스를 탈 출발 터미널을 말씀해 주세요.";
             }
             if (missing.contains("arrival")) {
+                if (unrecognizedArrival != null) {
+                    return String.format("죄송해요, '%s'는 아직 지원하지 않는 지역이에요. 다른 도착지를 말씀해 주세요.", unrecognizedArrival);
+                }
                 return (departure != null && !departure.isBlank() ? departure + "에서 " : "") + "어디로 가시나요?";
             }
             if (missing.contains("date") && missing.contains("departureTime")) {

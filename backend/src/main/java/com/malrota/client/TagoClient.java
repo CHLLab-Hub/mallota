@@ -6,6 +6,7 @@ import com.malrota.config.TagoProperties;
 import com.malrota.dto.response.BusSchedule;
 import com.malrota.util.KoreanVowelFold;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.http.client.SimpleClientHttpRequestFactory;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
 
@@ -17,8 +18,18 @@ import java.util.*;
 public class TagoClient {
 
     private final TagoProperties properties;
-    private final RestClient restClient = RestClient.create();
+    // 타임아웃을 안 걸어두면 TAGO 서버가 느려질 때(예: 짧은 시간 안에 요청을 몰아서 보냈을 때) 요청이
+    // 무한정 걸려서, 프론트가 30초 뒤 자체적으로 요청을 끊을 때까지 화면이 멈춰버린다. IBM STT/TTS
+    // 클라이언트와 같은 이유로 연결/응답 각각 상한을 둬서 실패라도 빨리 나게 한다.
+    private final RestClient restClient = RestClient.builder().requestFactory(timeoutRequestFactory()).build();
     private final ObjectMapper objectMapper = new ObjectMapper();
+
+    private static SimpleClientHttpRequestFactory timeoutRequestFactory() {
+        SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
+        factory.setConnectTimeout(5_000);
+        factory.setReadTimeout(8_000);
+        return factory;
+    }
 
     // 전국 복수 세부 터미널 및 별칭 전체 매핑 테이블 (TAGO 고속버스 터미널 ID)
     private static final Map<String, String> TERMINAL_MAP = new LinkedHashMap<>();

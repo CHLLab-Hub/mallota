@@ -1,8 +1,10 @@
 package com.malrota.service;
 
+import com.malrota.client.TagoClient;
 import com.malrota.client.WatsonxClient;
 import com.malrota.domain.ConversationSession;
 import com.malrota.dto.request.ConversationParseRequest;
+import com.malrota.dto.response.BusSchedule;
 import com.malrota.dto.response.ConversationParseResponse;
 import com.malrota.service.nlu.ConversationRuleExtractor;
 import org.junit.jupiter.api.Test;
@@ -13,8 +15,70 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 class ConversationParseServiceTest {
 
+    // 출발/도착 사이에 노선이 있는지 확인하는 로직이 이 테스트들의 관심사(NLU/세션 상태)를 방해하지
+    // 않도록, 어떤 출발지-도착지를 물어봐도 항상 노선이 있다고 답하는 가짜 TagoClient를 쓴다.
+    private static BusSearchService alwaysHasRouteService() {
+        TagoClient fakeTagoClient = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of(new BusSchedule("R01", "우등", depId, arrId, date + "0900", date + "1000", 10_000));
+            }
+        };
+        return new BusSearchService(fakeTagoClient);
+    }
+
     // watsonx 클라이언트 없이(rule-base 전용) 실행해 결정론적으로 검증한다.
-    private final ConversationParseService service = new ConversationParseService(null, new ConversationRuleExtractor());
+    private final ConversationParseService service = new ConversationParseService(null, new ConversationRuleExtractor(), alwaysHasRouteService());
+
+    @Test
+    void reports_route_not_found_as_soon_as_departure_and_arrival_are_both_resolved() {
+        // 실제로 보고된 요구사항: 노선이 없으면 날짜/인원/좌석까지 다 물어본 뒤에야 알리지 말고,
+        // 출발지-도착지가 확정되는 즉시(날짜를 묻기 전에) 바로 확인해서 알려줘야 한다.
+        TagoClient noRouteTagoClient = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of(); // 이 두 터미널 사이에는 노선이 없다
+            }
+        };
+        ConversationParseService serviceWithNoRoute = new ConversationParseService(
+                null, new ConversationRuleExtractor(), new BusSearchService(noRouteTagoClient));
+
+        ConversationParseResponse r = serviceWithNoRoute.parse(
+                new ConversationParseRequest("서울경부에서 포항으로 가는 버스", "s1"), new ConversationSession("s1"));
+
+        assertThat(r.routeNotFound()).isTrue();
+        assertThat(r.clarificationPrompt()).contains("서울경부").contains("포항").contains("직행");
+        // 노선이 없다는 걸 안 이상, 날짜를 묻는 등 다음 단계로 넘어가면 안 된다.
+        assertThat(r.clarificationPrompt()).doesNotContain("날짜");
+    }
+
+    @Test
+    void tells_the_user_an_unregistered_place_is_not_supported_instead_of_repeating_the_same_question() {
+        // 실제로 보고된 사고: 등록 안 된 지명("완도")을 도착지로 말하면 추출기가 그 단어 자체를
+        // 지명으로 인식하지 못해서 "어디로 가시나요?"만 계속 반복됐다. 이젠 그 지역을 아직
+        // 지원하지 않는다고 정직하게 안내해야 한다.
+        ConversationParseResponse r = service.parse(
+                new ConversationParseRequest("서울경부에서 완도로 가는 버스", "s1"), new ConversationSession("s1"));
+
+        assertThat(r.clarificationPrompt()).contains("완도").contains("지원하지 않는");
+        assertThat(r.routeNotFound()).isFalse(); // 노선 없음이 아니라 아예 모르는 지명이라는 별개의 사유
+    }
+
+    @Test
+    void does_not_recheck_the_route_on_every_subsequent_turn_once_confirmed() {
+        // 노선이 있다고 이미 확인된 뒤에는(이전 턴에 출발/도착이 확정됨) 매 턴마다 TAGO를 다시
+        // 조회하지 않아야 한다 — 그렇지 않으면 뒤이은 모든 턴이 TAGO 응답 속도에 발목을 잡힌다.
+        ConversationSession session = new ConversationSession("s1");
+        session.mergeConditions("서울경부", "부산종합", "2026-08-28", null, "ANY", "ANY", "ANY",
+                1, List.of(), List.of(), null);
+
+        ConversationParseResponse r = service.parse(
+                new ConversationParseRequest("한 명이요", "s1"), session);
+
+        assertThat(r.routeNotFound()).isFalse();
+    }
 
     @Test
     void does_not_fall_back_to_the_departure_city_when_arrival_is_stated_with_a_particle() {
@@ -322,7 +386,7 @@ class ConversationParseServiceTest {
         // 접근성 배려 ELDERLY_CARE가 통째로 사라지는 일이 있었다 — 사용자는 시간대만 말했을 뿐인데도.
         // LLM이 "기존 값 유지" 지시를 못 지켜도, 룰베이스가 못 찾은 필드는 LLM보다 세션을 먼저
         // 신뢰해야 이미 확정된 조건이 조용히 초기화되지 않는다.
-        ConversationParseService serviceWithLlm = new ConversationParseService(new MisbehavingWatsonxClient(), new ConversationRuleExtractor());
+        ConversationParseService serviceWithLlm = new ConversationParseService(new MisbehavingWatsonxClient(), new ConversationRuleExtractor(), alwaysHasRouteService());
         ConversationSession session = new ConversationSession("s1");
         session.mergeConditions("서울경부", "대구", "2026-08-27", null, "MORNING", "ANY", "ANY",
                 2, List.of(), List.of("ELDERLY_CARE"), "대구 어느 터미널로 원하시나요?");

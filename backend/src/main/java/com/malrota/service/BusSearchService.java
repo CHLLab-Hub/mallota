@@ -110,7 +110,29 @@ public class BusSearchService {
      * 이라는 이유로 카드를 생략하거나 라벨을 바꿔치기하지 않는다. 두 카테고리 이름은 항상 고정이다.
      */
     public List<BusRecommendation> recommend(BusSearchRequest request) {
-        List<BusSchedule> gradeFiltered = gradeFilteredSchedules(request);
+        return recommendFrom(gradeFilteredSchedules(request), request);
+    }
+
+    /** recommend()와 hasAnyScheduleBetween()을 한 번의 TAGO 조회로 함께 계산한 결과. */
+    public record RecommendResult(List<BusRecommendation> recommendations, boolean routeExists) {}
+
+    /**
+     * recommend()와 동일하지만, 노선 자체의 존재 여부(등급/시간 조건과 무관)도 함께 계산한다.
+     * TAGO 원본 조회를 한 번만 하도록 recommend()/hasAnyScheduleBetween()을 각각 호출하는 대신
+     * 이 메서드로 합쳐서 쓴다 — 안 그러면 같은 노선을 두 번 조회하게 되어 TAGO 응답이 느릴 때
+     * 대기 시간이 두 배가 된다.
+     */
+    public RecommendResult recommendWithRouteInfo(BusSearchRequest request) {
+        List<BusSchedule> raw = rawSchedules(request);
+        List<BusSchedule> gradeFiltered = raw.stream()
+                .filter(schedule -> matchesGrade(schedule, request.busGradePreference()))
+                .toList();
+        List<BusRecommendation> recommendations = recommendFrom(gradeFiltered, request);
+        boolean routeExists = !recommendations.isEmpty() || !raw.isEmpty();
+        return new RecommendResult(recommendations, routeExists);
+    }
+
+    private List<BusRecommendation> recommendFrom(List<BusSchedule> gradeFiltered, BusSearchRequest request) {
         List<BusRecommendation> result = new ArrayList<>();
         if (gradeFiltered.isEmpty()) return result;
 

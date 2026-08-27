@@ -1,10 +1,14 @@
 package com.malrota.service;
 
+import com.malrota.client.TagoClient;
 import com.malrota.domain.ConversationSession;
 import com.malrota.dto.request.ConversationParseRequest;
+import com.malrota.dto.response.BusSchedule;
 import com.malrota.dto.response.ConversationParseResponse;
 import com.malrota.service.nlu.ConversationRuleExtractor;
 import org.junit.jupiter.api.Test;
+
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -16,7 +20,20 @@ import static org.assertj.core.api.Assertions.assertThat;
  */
 class ConversationParseServiceMultiTerminalTest {
 
-    private final ConversationParseService service = new ConversationParseService(null, new ConversationRuleExtractor());
+    // 이 테스트들의 관심사는 되묻기 흐름/세션 상태이지 실제 노선 존재 여부가 아니므로, 어떤
+    // 출발지-도착지를 물어봐도 항상 노선이 있다고 답하는 가짜 TagoClient를 쓴다.
+    private static BusSearchService alwaysHasRouteService() {
+        TagoClient fakeTagoClient = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of(new BusSchedule("R01", "우등", depId, arrId, date + "0900", date + "1000", 10_000));
+            }
+        };
+        return new BusSearchService(fakeTagoClient);
+    }
+
+    private final ConversationParseService service = new ConversationParseService(null, new ConversationRuleExtractor(), alwaysHasRouteService());
 
     private ConversationSession newSession(String departure, String arrival) {
         ConversationSession session = new ConversationSession("s1");
