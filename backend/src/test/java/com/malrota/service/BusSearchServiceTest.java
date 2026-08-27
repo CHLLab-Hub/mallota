@@ -242,6 +242,34 @@ class BusSearchServiceTest {
     }
 
     @Test
+    void last_bus_itself_is_labeled_closest_time_even_when_a_cheaper_alternative_gets_the_cheapest_label() {
+        // 실제로 보고된 사고: "막차"를 요청했는데, 그날 진짜 막차(22시, 심야우등이라 비쌈)가
+        // "최저가"로 소진되고, 60분 이내로 범위를 넓혀 찾은 더 저렴한 다른 버스(21시, 우등)가
+        // "가까운 시간"으로 나왔다 — "가까운 시간"이라는 버스가 실제로는 요청 시각(=막차 시각)과
+        // 더 멀리 떨어져 있는 라벨 역전 현상이었다. 막차 자신은 정의상 거리 0이므로 항상 "가까운
+        // 시간"이어야 하고, 그보다 싼 대안이 있다면 그게 "최저가"여야 한다.
+        TagoClient client = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of(
+                        schedule("CHEAPER_ALTERNATIVE", "202608252100", 11_000), // 막차 1시간 전, 더 저렴
+                        schedule("ACTUAL_LAST_BUS", "202608252200", 13_200)      // 그날 진짜 막차, 더 비쌈
+                );
+            }
+        };
+
+        BusSearchService service = new BusSearchService(client);
+        List<BusRecommendation> recs = service.recommend(new BusSearchRequest(
+                "동대구", "부산", "2026-08-25", null, "ANY", "LAST", "ANY"));
+
+        assertThat(recs).filteredOn(r -> r.labels().contains("가까운 시간"))
+                .extracting(r -> r.bus().routeId()).containsExactly("ACTUAL_LAST_BUS");
+        assertThat(recs).filteredOn(r -> r.labels().contains("최저가"))
+                .extracting(r -> r.bus().routeId()).containsExactly("CHEAPER_ALTERNATIVE");
+    }
+
+    @Test
     void closest_time_card_widens_from_thirty_minutes_to_one_hour_when_nothing_closer_exists() {
         // "최저가랑 조건에 맞는 가장 가까운 시간 +-30분으로, 없으면 1시간까지"라는 요청에 따라,
         // 30분 이내에 "최저가"와 구분되는 다른 후보가 없으면 1시간까지 범위를 넓혀서 "가까운 시간"을

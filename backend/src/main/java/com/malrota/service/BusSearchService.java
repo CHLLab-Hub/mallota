@@ -192,28 +192,61 @@ public class BusSearchService {
                 : withinMinutes(gradeFiltered, requestedTime, OTHER_TIME_FALLBACK_MINUTES);
         if (cheapestPool.isEmpty()) return result;
 
-        BusSchedule cheapest = cheapestPool.stream().min(Comparator.comparingInt(BusSchedule::charge)).orElse(null);
-
-        // "가까운 시간": 최저가와 다른 버스를 30분 이내에서 먼저 찾고, (최저가가 그 안의 유일한
-        // 후보였던 경우 등) 없으면 1시간까지 범위를 넓힌다. 이르게 출발하는 쪽보다 늦게 출발하는
-        // 쪽을 살짝 더 선호한다. 그래도 다른 버스가 전혀 없으면 최저가와 같은 버스로 합쳐서
-        // 보여준다 — 두 카테고리("최저가"/"가까운 시간")는 항상 둘 다 존재해야 한다.
-        BusSchedule closest = primaryPool.stream()
-                .filter(s -> cheapest == null || !isSameBus(s, cheapest))
-                .min(Comparator.comparingInt(s -> weightedDistance(departureTime(s), requestedTime)))
-                .orElse(null);
-        if (closest == null) {
-            closest = withinMinutes(gradeFiltered, requestedTime, OTHER_TIME_FALLBACK_MINUTES).stream()
-                    .filter(s -> cheapest == null || !isSameBus(s, cheapest))
+        BusSchedule cheapest;
+        BusSchedule closest;
+        boolean isFirstOrLast = "FIRST".equalsIgnoreCase(request.servicePreference()) || "LAST".equalsIgnoreCase(request.servicePreference());
+        if (isFirstOrLast) {
+            // 첫차/막차는 "요청 시각" 자체가 그날 실제 첫차/막차의 시각이다(위
+            // withEffectiveDepartureTime 참고) — 그 버스 자신이 정의상 거리 0으로 항상 "가까운
+            // 시간"이어야 한다. 실제로 보고된 사고: 반대로 계산해서, 진짜 막차(비쌈)가 "최저가"로
+            // 소진되고 오히려 더 먼 대안 버스가 "가까운 시간"으로 나와 라벨이 거꾸로 뒤바뀌어
+            // 보였다("최저가"인데 옆 카드보다 비싼 역설). 막차 자신을 "가까운 시간"으로 고정하고,
+            // 그와 다른 더 저렴한 대안을 30분 이내에서 먼저 찾은 뒤 없으면 1시간까지 넓혀 "최저가"로
+            // 삼는다 — 다른 대안이 전혀 없으면 막차 자신과 합쳐진다.
+            closest = cheapestPool.stream()
                     .min(Comparator.comparingInt(s -> weightedDistance(departureTime(s), requestedTime)))
                     .orElse(null);
-        }
-        if (closest == null) {
-            closest = cheapest;
+            cheapest = cheapestExcluding(primaryPool, gradeFiltered, requestedTime, closest);
+        } else {
+            cheapest = cheapestPool.stream().min(Comparator.comparingInt(BusSchedule::charge)).orElse(null);
+
+            // "가까운 시간": 최저가와 다른 버스를 30분 이내에서 먼저 찾고, (최저가가 그 안의 유일한
+            // 후보였던 경우 등) 없으면 1시간까지 범위를 넓힌다. 이르게 출발하는 쪽보다 늦게 출발하는
+            // 쪽을 살짝 더 선호한다. 그래도 다른 버스가 전혀 없으면 최저가와 같은 버스로 합쳐서
+            // 보여준다 — 두 카테고리("최저가"/"가까운 시간")는 항상 둘 다 존재해야 한다.
+            closest = closestExcluding(primaryPool, gradeFiltered, requestedTime, cheapest);
         }
 
         addCheapestAndClosest(result, cheapest, closest);
         return result;
+    }
+
+    /** primaryPool(30분 이내)에서 exclude와 다른 최저가를 찾고, 없으면 1시간까지 넓힌다. */
+    private BusSchedule cheapestExcluding(List<BusSchedule> primaryPool, List<BusSchedule> gradeFiltered,
+                                           LocalTime requestedTime, BusSchedule exclude) {
+        BusSchedule found = primaryPool.stream()
+                .filter(s -> exclude == null || !isSameBus(s, exclude))
+                .min(Comparator.comparingInt(BusSchedule::charge))
+                .orElse(null);
+        if (found != null) return found;
+        return withinMinutes(gradeFiltered, requestedTime, OTHER_TIME_FALLBACK_MINUTES).stream()
+                .filter(s -> exclude == null || !isSameBus(s, exclude))
+                .min(Comparator.comparingInt(BusSchedule::charge))
+                .orElse(exclude);
+    }
+
+    /** primaryPool(30분 이내)에서 exclude와 다른, 요청 시각에 가장 가까운 버스를 찾고, 없으면 1시간까지 넓힌다. */
+    private BusSchedule closestExcluding(List<BusSchedule> primaryPool, List<BusSchedule> gradeFiltered,
+                                          LocalTime requestedTime, BusSchedule exclude) {
+        BusSchedule found = primaryPool.stream()
+                .filter(s -> exclude == null || !isSameBus(s, exclude))
+                .min(Comparator.comparingInt(s -> weightedDistance(departureTime(s), requestedTime)))
+                .orElse(null);
+        if (found != null) return found;
+        return withinMinutes(gradeFiltered, requestedTime, OTHER_TIME_FALLBACK_MINUTES).stream()
+                .filter(s -> exclude == null || !isSameBus(s, exclude))
+                .min(Comparator.comparingInt(s -> weightedDistance(departureTime(s), requestedTime)))
+                .orElse(exclude);
     }
 
     /**
