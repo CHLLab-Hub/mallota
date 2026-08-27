@@ -545,6 +545,73 @@ class ConversationParseServiceTest {
         }
     }
 
+    // LLM이 STT 오인식("참가죽" -> "창가 쪽")을 correctedText로 교정해서 돌려주는 상황을 흉내낸다.
+    // LLM 자신의 구조화 필드(seatPreferences)는 일부러 비워둬서, 실제로 반영되는 값이 LLM 자신의
+    // 판단이 아니라 correctedText로 다시 돌린 룰베이스 추출 결과임을 검증할 수 있게 한다.
+    private static class SeatCorrectingWatsonxClient extends WatsonxClient {
+        SeatCorrectingWatsonxClient() { super(null); }
+        @Override public boolean isConfigured() { return true; }
+        @Override public String ask(String prompt) {
+            return """
+                {"intent":"BUS_SEARCH","departure":null,"arrival":null,"date":null,
+                 "departureTime":null,"timePreference":"ANY","servicePreference":"ANY",
+                 "busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[],
+                 "correctedText":"창가 쪽으로 주세요"}
+                """;
+        }
+    }
+
+    @Test
+    void re_extracts_with_rules_using_the_llm_corrected_text_when_stt_mangles_a_keyword() {
+        // 실제로 보고된 사고: STT가 "창가 쪽"을 "참가죽"처럼 잘못 받아써서, 룰베이스가 원문 그대로는
+        // 좌석 선호를 알아듣지 못했다. LLM이 직전 질문 등 문맥으로 교정한 correctedText로 룰베이스를
+        // 다시 돌려서, LLM 자신의 구조화 필드가 비어 있어도(신뢰 우선순위가 낮으므로) 정규식의
+        // 결정성으로 정확한 값을 얻어야 한다.
+        ConversationParseService serviceWithCorrection = new ConversationParseService(
+                new SeatCorrectingWatsonxClient(), new ConversationRuleExtractor(), alwaysHasRouteService());
+        ConversationSession session = new ConversationSession("s1");
+        session.mergeConditions("서울경부", "대전복합", "2026-08-27", "09:00", "MORNING", "ANY", "ANY",
+                1, true, List.of(), false, List.of(), null);
+
+        ConversationParseResponse r = serviceWithCorrection.parse(
+                new ConversationParseRequest("참가죽으로 주세요", "s1"), session);
+
+        assertThat(r.seatPreferences()).contains("WINDOW");
+    }
+
+    // "두 장"이 "두잠"으로 STT 오인식된 상황. LLM 자신의 passengers 필드는 일부러 1(틀린 값)로
+    // 둬서, 실제 반영되는 2가 correctedText 기반 룰베이스 재추출 결과임을 검증한다.
+    private static class PassengerCorrectingWatsonxClient extends WatsonxClient {
+        PassengerCorrectingWatsonxClient() { super(null); }
+        @Override public boolean isConfigured() { return true; }
+        @Override public String ask(String prompt) {
+            return """
+                {"intent":"BUS_SEARCH","departure":null,"arrival":null,"date":null,
+                 "departureTime":null,"timePreference":"ANY","servicePreference":"ANY",
+                 "busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[],
+                 "correctedText":"두 장이요"}
+                """;
+        }
+    }
+
+    @Test
+    void re_extracts_passenger_count_from_llm_corrected_text_when_stt_mangles_the_number() {
+        // 실제로 보고된 사고: "두 장"이 STT로 "두잠"/"부장"/"주점" 등으로 잘못 받아써져서, 룰베이스가
+        // 원문 그대로는 인원수를 못 알아들었다. 직전 질문(인원 확인)을 참고해 LLM이 교정한
+        // correctedText로 룰베이스를 다시 돌려서 정확한 인원수를 얻어야 한다.
+        ConversationParseService serviceWithCorrection = new ConversationParseService(
+                new PassengerCorrectingWatsonxClient(), new ConversationRuleExtractor(), alwaysHasRouteService());
+        ConversationSession session = new ConversationSession("s1");
+        session.mergeConditions("서울경부", "대전복합", "2026-08-27", "09:00", "MORNING", "ANY", "ANY",
+                1, false, List.of(), false, List.of(),
+                "표를 찾을게요. 탑승하시는 인원은 총 몇 분이신가요? (혼자이시면 '한 명'이라고 말씀해 주세요.)");
+
+        ConversationParseResponse r = serviceWithCorrection.parse(
+                new ConversationParseRequest("두잠이요", "s1"), session);
+
+        assertThat(r.passengers()).isEqualTo(2);
+    }
+
     @Test
     void session_survives_a_misbehaving_llm_that_forgets_unmentioned_fields() {
         // 실제로 보고된 사고: 출발지 "서울경부"(구체 터미널)가 "서울"(도시명)로, 인원 2명이 1명으로,

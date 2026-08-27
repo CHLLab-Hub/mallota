@@ -71,8 +71,20 @@ public class ConversationParseService {
             }
         }
 
+        // [STT 오인식 교정] STT가 "참가죽"(창가 쪽), "두잠"(두 장)처럼 잘못 받아쓴 경우, 룰베이스는
+        // 정규식/키워드 매칭이라 원문 그대로는 못 알아듣는다. LLM이 직전 질문 등 문맥으로 교정한
+        // 텍스트(correctedText)가 원문과 다르면, 그 교정된 텍스트로 룰베이스를 한 번 더 돌려서 원본
+        // 텍스트 결과 대신 사용한다 — 정규식의 결정성과 LLM의 문맥 이해를 함께 활용하기 위해서다.
+        // LLM이 미설정/실패했으면 correctedText가 없으니 원본 텍스트 결과를 그대로 쓴다(기존 폴백).
+        String correctedText = llmResult != null ? llmResult.correctedText() : null;
+        String effectiveText = (correctedText != null && !correctedText.isBlank()) ? correctedText : userText;
+        if (!effectiveText.equals(userText)) {
+            rules = ruleExtractor.extract(effectiveText, now,
+                    sessionValue(session, ConversationSession::getTimePreference));
+        }
+
         // LLM + 룰베이스 + 세션 상태 병합 및 반문 생성
-        return normalize(llmResult, rules, session, userText);
+        return normalize(llmResult, rules, session, effectiveText);
     }
 
     private String extractRequestText(ConversationParseRequest request) {
@@ -234,7 +246,7 @@ public class ConversationParseService {
                             departure, arrival);
                 }
                 return new ConversationParseResponse(intent, keptDeparture, keptArrival, null, null, "ANY", "ANY", "ANY",
-                        1, false, List.of(), false, List.of(), List.of(), noRouteMessage, false, false, true);
+                        1, false, List.of(), false, List.of(), List.of(), noRouteMessage, false, false, true, null);
             }
         }
 
@@ -367,7 +379,7 @@ public class ConversationParseService {
                 intent, nullIfBlank(departure), nullIfBlank(arrival), nullIfBlank(date),
                 nullIfBlank(departureTime), timePreference, servicePreference, busGradePreference, passengers,
                 passengerMentioned, seatPreferences, seatPreferenceMentioned, accessibilityNeeds,
-                missing, prompt, wantsEarlierBus, wantsLaterBus, false
+                missing, prompt, wantsEarlierBus, wantsLaterBus, false, null
         );
     }
 
@@ -580,6 +592,11 @@ public class ConversationParseService {
                 jsonValue(session.getDepartureTime()), jsonValue(session.getTimePreference()), jsonValue(session.getServicePreference()),
                 jsonValue(session.getBusGradePreference()), session.getPassengers(), jsonArray(session.getSeatPreferences()), jsonArray(session.getAccessibilityNeeds()));
         String ruleHintsJson = ruleHintsJson(rules);
+        // STT 오인식 교정(correctedText)이 직전 질문의 맥락을 활용할 수 있도록 함께 전달한다 — 예를
+        // 들어 직전 질문이 "인원이 몇 분이신가요?"였다면, "두잠"처럼 이상하게 받아쓴 답변도 "두 장"의
+        // 오인식임을 추론할 수 있다.
+        String previousQuestion = sessionValue(session, ConversationSession::getClarificationPrompt);
+        String previousQuestionText = (previousQuestion == null || previousQuestion.isBlank()) ? "(없음)" : previousQuestion;
 
         return """
         당신은 고령자(디지털 소외계층) 및 교통약자를 위한 고속버스 예매 NLU 인공지능입니다.
@@ -591,6 +608,7 @@ public class ConversationParseService {
         - 기준 시각: %s (Asia/Seoul)
         - 기존 수집 정보: %s
         - 이번 발화에서 규칙 기반으로 이미 정확히 인식된 값(참고용): %s
+        - 직전에 사용자에게 물어본 질문(있다면): %s
 
         [핵심 추출 규칙]
         0. "이번 발화에서 규칙 기반으로 이미 정확히 인식된 값"에 들어있는 필드는 이미 확실하니 그 값을 그대로 반환하세요.
@@ -617,6 +635,12 @@ public class ConversationParseService {
            어느 필드인지는 값의 종류로 판단합니다: 지명이면 출발/도착 중 그 지명이 있던 자리(도시가 통째로 바뀌어도 마찬가지), 좌석 위치/등급 표현이면 해당 선호 필드.
            특히 정확한 시각(예: "저녁 7시")과 servicePreference(FIRST/LAST, 예: "첫차")는 절대 동시에 존재할 수 없는 값입니다.
            "저녁 7시 말고 첫차로"라고 하면 departureTime과 timePreference는 반드시 null로 비우고 servicePreference만 "FIRST"로 반환하세요 — 거부된 시각을 servicePreference와 함께 남기면 안 됩니다.
+        8. correctedText(음성 인식 오인식 교정): 사용자 발화는 음성 인식(STT) 결과라서 발음이 비슷한
+           단어로 잘못 받아써지는 경우가 흔합니다(예: "창가 쪽"이 "참가죽"으로, "두 장"이 "두잠"/
+           "부장"/"주점"으로). "직전에 사용자에게 물어본 질문"을 참고해서 어떤 종류의 답변이었을지
+           문맥으로 판단하고, 명백히 문맥과 안 맞는 단어만 실제로 의도했을 법한 단어로 고쳐
+           correctedText에 담으세요. 문장 구조와 어투, 사투리, 실제로 말이 되는 다른 내용은 그대로
+           유지하고, 확신이 없으면 원문을 그대로 반환하세요 — 없는 내용을 새로 지어내면 안 됩니다.
 
         [반환 JSON 스키마]
         {
@@ -630,51 +654,67 @@ public class ConversationParseService {
           "busGradePreference": "GENERAL | EXCELLENT | PREMIUM | ANY",
           "passengers": 1,
           "seatPreferences": [],
-          "accessibilityNeeds": []
+          "accessibilityNeeds": [],
+          "correctedText": "STT 오인식을 교정한 원문 (교정할 게 없으면 원문 그대로)"
         }
 
         [예시 1 - 표준 발화 및 보행 배려]
         기준 시각: 2026-08-24T10:00:00+09:00
         기존 수집 정보: {}
+        직전에 사용자에게 물어본 질문(있다면): (없음)
         사용자: "내일 오전 대구에서 대전 가는데 우등으로, 다리가 불편해서 앞쪽 창가로 줘"
         결과:
-        {"intent":"BUS_SEARCH","departure":"대구","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"EXCELLENT","passengers":1,"seatPreferences":["FRONT","WINDOW"],"accessibilityNeeds":["WALKING_DIFFICULTY"]}
+        {"intent":"BUS_SEARCH","departure":"대구","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"EXCELLENT","passengers":1,"seatPreferences":["FRONT","WINDOW"],"accessibilityNeeds":["WALKING_DIFFICULTY"],"correctedText":"내일 오전 대구에서 대전 가는데 우등으로, 다리가 불편해서 앞쪽 창가로 줘"}
 
         [예시 2 - 사투리 발화 및 손주 동행]
         기준 시각: 2026-08-24T10:00:00+09:00
         기존 수집 정보: {}
+        직전에 사용자에게 물어본 질문(있다면): (없음)
         사용자: "손주 아 데꼬 부산행 젤 빠른 거 둘이 탈 건데 계단 타기 하영 힘들어"
         결과:
-        {"intent":"BUS_SEARCH","departure":null,"arrival":"부산","date":null,"departureTime":null,"timePreference":"ANY","servicePreference":"FIRST","busGradePreference":"ANY","passengers":2,"seatPreferences":["FRONT"],"accessibilityNeeds":["WALKING_DIFFICULTY","ELDERLY_CARE"]}
+        {"intent":"BUS_SEARCH","departure":null,"arrival":"부산","date":null,"departureTime":null,"timePreference":"ANY","servicePreference":"FIRST","busGradePreference":"ANY","passengers":2,"seatPreferences":["FRONT"],"accessibilityNeeds":["WALKING_DIFFICULTY","ELDERLY_CARE"],"correctedText":"손주 아 데꼬 부산행 젤 빠른 거 둘이 탈 건데 계단 타기 하영 힘들어"}
 
         [예시 3 - 멀티턴 상태 수정]
         기준 시각: 2026-08-24T10:00:00+09:00
         기존 수집 정보: {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"EXCELLENT","passengers":1,"seatPreferences":["FRONT"],"accessibilityNeeds":["WALKING_DIFFICULTY"]}
+        직전에 사용자에게 물어본 질문(있다면): (없음)
         사용자: "우등 말고 젤 싼 일반으로 바꿔줘"
         결과:
-        {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"GENERAL","passengers":1,"seatPreferences":["FRONT"],"accessibilityNeeds":["WALKING_DIFFICULTY"]}
+        {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"GENERAL","passengers":1,"seatPreferences":["FRONT"],"accessibilityNeeds":["WALKING_DIFFICULTY"],"correctedText":"우등 말고 젤 싼 일반으로 바꿔줘"}
 
         [예시 4 - 정확한 시각과 servicePreference는 공존 불가 (규칙 7 핵심 예시)]
         기준 시각: 2026-08-24T10:00:00+09:00
         기존 수집 정보: {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":"19:00","timePreference":"EVENING","servicePreference":"ANY","busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[]}
+        직전에 사용자에게 물어본 질문(있다면): (없음)
         사용자: "저녁 일곱시 말고 첫차로 부탁해"
         결과:
-        {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"ANY","servicePreference":"FIRST","busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[]}
+        {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":null,"timePreference":"ANY","servicePreference":"FIRST","busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[],"correctedText":"저녁 일곱시 말고 첫차로 부탁해"}
 
         [예시 5 - 조건이 여러 턴에 걸쳐 나뉘어 들어올 때 (상태 유지 핵심 예시)]
         기준 시각: 2026-08-24T10:00:00+09:00
         기존 수집 정보: {"intent":"BUS_SEARCH","departure":null,"arrival":null,"date":null,"departureTime":null,"timePreference":"ANY","servicePreference":"FIRST","busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[]}
+        직전에 사용자에게 물어본 질문(있다면): (없음)
         사용자: "대전에서 서울 가요"
         결과:
-        {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":null,"departureTime":null,"timePreference":"ANY","servicePreference":"FIRST","busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[]}
+        {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":null,"departureTime":null,"timePreference":"ANY","servicePreference":"FIRST","busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[],"correctedText":"대전에서 서울 가요"}
+
+        [예시 6 - STT 오인식을 직전 질문 맥락으로 교정 (규칙 8 핵심 예시)]
+        기준 시각: 2026-08-24T10:00:00+09:00
+        기존 수집 정보: {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":"09:00","timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[]}
+        직전에 사용자에게 물어본 질문(있다면): 표를 찾을게요. 탑승하시는 인원은 총 몇 분이신가요? (혼자이시면 '한 명'이라고 말씀해 주세요.)
+        사용자: "두잠이요"
+        결과:
+        {"intent":"BUS_SEARCH","departure":"서울","arrival":"대전","date":"2026-08-25","departureTime":"09:00","timePreference":"MORNING","servicePreference":"ANY","busGradePreference":"ANY","passengers":2,"seatPreferences":[],"accessibilityNeeds":[],"correctedText":"두 장이요"}
 
         [실제 입력]
         기준 시각: %s
         기존 수집 정보: %s
         이번 발화에서 규칙 기반으로 이미 정확히 인식된 값: %s
+        직전에 사용자에게 물어본 질문(있다면): %s
         사용자: "%s"
         결과:
-        """.formatted(isoDateTime, currentStateJson, ruleHintsJson, isoDateTime, currentStateJson, ruleHintsJson, text);
+        """.formatted(isoDateTime, currentStateJson, ruleHintsJson, previousQuestionText,
+                isoDateTime, currentStateJson, ruleHintsJson, previousQuestionText, text);
     }
 
     private String extractJson(String raw) {
