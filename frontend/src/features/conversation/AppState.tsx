@@ -6,8 +6,8 @@ export type Screen = 'home' | 'bus' | 'seat' | 'confirm' | 'history' | 'mypage'
 // 대화 메시지
 export type ChatMessage = { role: 'app' | 'user'; text: string }
 
-// 예매 내역 항목
-export type Booking = { bus: BusSchedule; seatNo: string; id: string }
+// 예매 내역 항목 (totalCharge는 좌석 1자리 요금이 아니라 인원수까지 반영한 실제 결제 금액)
+export type Booking = { bus: BusSchedule; seatNo: string; passengers: number; totalCharge: number; id: string }
 
 // 공유 상태 타입
 interface AppStateValue {

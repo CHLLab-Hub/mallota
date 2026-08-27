@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { speechToText, textToSpeech } from '../../api/voiceApi'
 import { useVoiceRecorder } from './useVoiceRecorder'
 import { useAppState } from './AppState'
@@ -16,8 +16,14 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
   const [showInput, setShowInput] = useState(false)
   const [transcribing, setTranscribing] = useState(false)
   const [error, setError] = useState<string | null>(null)
+  const bottomRef = useRef<HTMLDivElement>(null)
 
   const { recording, startRecording, stopRecording } = useVoiceRecorder()
+
+  // 새 메시지가 오면 대화창을 최신 메시지로 자동 스크롤한다 — 예전 메시지는 위로 스크롤해서 볼 수 있도록
+  useEffect(() => {
+    bottomRef.current?.scrollIntoView({ behavior: 'smooth', block: 'end' })
+  }, [messages.length])
 
   async function handleMicClick() {
     if (recording) {
@@ -26,7 +32,11 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
       try {
         const audio = await stopRecording()
         const data = await speechToText(audio)
-        if (data.transcript) await onUserSpeak(data.transcript)
+        if (data.transcript) {
+          await onUserSpeak(data.transcript)
+        } else {
+          setError('무슨 말씀인지 못 들었어요. 다시 한 번 말씀해 주세요.')
+        }
       } catch (e) {
         setError('음성 인식에 실패했습니다. 다시 시도해 주세요.')
       } finally {
@@ -34,6 +44,7 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
       }
     } else {
       setError(null)
+      stopSpeaking() // 겹쳐 들리는 문제 방지
       try {
         await startRecording()
       } catch (e) {
@@ -46,18 +57,22 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
     if (!text.trim()) return
     const t = text
     setText('')
+    setError(null)
     await onUserSpeak(t)
   }
 
   return (
     <div>
       <div className="chat-container">
-        {messages.slice(-4).map((m, i) => (
-          <div key={i} className={`chat-row ${m.role}`}>
-            {m.role === 'app' && <img src={logo} alt="" className="chat-avatar" />}
-            <div className={`chat-bubble ${m.role}`}>{m.text}</div>
-          </div>
-        ))}
+        <div className="chat-messages">
+          {messages.map((m, i) => (
+            <div key={i} className={`chat-row ${m.role}`}>
+              {m.role === 'app' && <img src={logo} alt="" className="chat-avatar" />}
+              <div className={`chat-bubble ${m.role}`}>{m.text}</div>
+            </div>
+          ))}
+          <div ref={bottomRef} />
+        </div>
 
         {error && <p style={{ color: 'red' }}>{error}</p>}
 
@@ -110,16 +125,39 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
   )
 }
 
+// 모듈 스코프 상태: "지금 재생 중인 오디오"와 "가장 최근 요청"을 추적해 TTS끼리 겹치지 않도록
+let currentAudio: HTMLAudioElement | null = null
+let latestRequestId = 0
+
 // 앱이 말하기 (TTS) — 어디서든 쓸 수 있게 export
 export async function speak(t: string) {
   if (!t.trim()) return
+  const requestId = ++latestRequestId
   try {
     const data = await textToSpeech(t)
+    // textToSpeech가 응답을 기다리는 사이에 더 최신 speak() 호출이 들어왔다면, 이 오래된 응답은 재생하지 않고 버림
+    if (requestId !== latestRequestId) return
     if (data.audio) {
+      // 아직 재생 중인 이전 TTS가 있으면 먼저 멈추어 다음 텍스트가 나올 때 이전 안내가 겹치지 않게 함
+      if (currentAudio) {
+        currentAudio.pause()
+        currentAudio.currentTime = 0
+      }
       const audio = new Audio('data:audio/mp3;base64,' + data.audio)
+      currentAudio = audio
       await audio.play()
     }
   } catch (e) {
     // 무시
+  }
+}
+
+// 사용자가 마이크를 눌러 말하기 시작할 때, 아직 재생 중인 안내 음성이 있으면 멈춤
+export function stopSpeaking() {
+  latestRequestId++ // 응답 대기 중이던 이전 speak() 호출이 뒤늦게 재생을 시작하지 못하게 막음
+  if (currentAudio) {
+    currentAudio.pause()
+    currentAudio.currentTime = 0
+    currentAudio = null
   }
 }

@@ -49,8 +49,9 @@ export interface SeatRecommendation {
   score: number
   reasons: string[]
   alternatives: Seat[]
-  adjacentPair: boolean   // alternatives가 bestSeat과 나란히 붙은 연석인지
+  adjacentPair: boolean   // alternatives가 bestSeat과 함께 배정된 그룹 좌석인지 - 동률 대안 구분 용도
   allSeats: Seat[]
+  tiedAlternativeSeats: Seat[] // 추천(그룹 포함)과 점수가 동률인 다른 좌석/그룹 — "같은 조건 좌석" 표시용
 }
 
 export type ConversationStateValue =

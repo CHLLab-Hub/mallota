@@ -45,7 +45,7 @@ export function HistoryPage() {
                 {formatTime(b.bus.departureTime)} 출발 · 좌석 {b.seatNo}
               </div>
               <div style={{ color: '#58665f', marginTop: '4px' }}>
-                {b.bus.grade} · {b.bus.charge.toLocaleString()}원
+                {b.bus.grade} · {b.passengers}분 · {b.totalCharge.toLocaleString()}원
               </div>
               <button
                 type="button"

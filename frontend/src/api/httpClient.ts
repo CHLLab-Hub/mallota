@@ -116,14 +116,29 @@ export async function request<T>(
   const url = buildApiUrl(path)
   let response: Response
 
+  // 호출하는 쪽에서 signal을 직접 넘기지 않은 요청은 기본 30초 타임아웃을 건다. 안 그러면 서버가
+  // 응답 없이 멈췄을 때(예: 음성 인식 API가 느려질 때) 화면이 "인식 중..."에서 영영 멈춰버린다.
+  const timeoutSignal = requestInit.signal ? undefined : AbortSignal.timeout(30_000)
+
   try {
     response = await fetch(url, {
       ...requestInit,
+      signal: requestInit.signal ?? timeoutSignal,
       body: json === undefined ? body : JSON.stringify(json),
       headers: requestHeaders,
     })
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
+      if (timeoutSignal) {
+        throw new ApiError({
+          timestamp: new Date().toISOString(),
+          status: 0,
+          code: 'TIMEOUT',
+          message: '서버 응답이 너무 오래 걸려요. 잠시 후 다시 시도해 주세요.',
+          path,
+          errors: [],
+        })
+      }
       throw error
     }
 

@@ -2,6 +2,7 @@ package com.malrota.service;
 
 import com.malrota.client.TagoClient;
 import com.malrota.dto.request.BusSearchRequest;
+import com.malrota.dto.response.BusRecommendation;
 import com.malrota.dto.response.BusSchedule;
 import org.junit.jupiter.api.Test;
 
@@ -38,5 +39,40 @@ class BusSearchServiceTest {
 
     private static BusSchedule schedule(String routeId, String departureTime) {
         return new BusSchedule(routeId, "우등", "서울", "대전", departureTime, departureTime, 16000);
+    }
+
+    private static BusSchedule schedule(String routeId, String departureTime, int charge) {
+        return new BusSchedule(routeId, "우등", "서울", "대전", departureTime, departureTime, charge);
+    }
+
+    @Test
+    void cheapest_recommendation_stays_within_two_hours_of_the_requested_time() {
+        // 실제로 보고된 사고: "최저가"가 예매하려는 시간대와 완전히 동떨어진(예: 새벽) 가장 싼 버스를
+        // 잡아버렸다. 아무리 싸도 "말씀하신 시간과 가장 가까운 버스"(추천 시간)에서 2시간을 넘게
+        // 벗어나면 최저가 후보에서 제외해야 한다.
+        TagoClient client = new TagoClient(null) {
+            @Override
+            public String findTerminalId(String terminalName) {
+                return terminalName;
+            }
+
+            @Override
+            public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of(
+                        schedule("R01", "202608250900", 20000), // 요청 시각과 가장 가까움 (추천 시간)
+                        schedule("R02", "202608250930", 18000), // 2시간 이내라 최저가 후보 가능
+                        schedule("R03", "202608252300", 5000)   // 훨씬 싸지만 요청 시각과 14시간 차이
+                );
+            }
+        };
+
+        BusSearchService service = new BusSearchService(client);
+        List<BusRecommendation> recs = service.recommend(new BusSearchRequest(
+                "서울", "대전", "2026-08-25", "09:00", "ANY", "ANY", "ANY"));
+
+        BusRecommendation cheapest = recs.stream().filter(r -> r.label().equals("최저가")).findFirst().orElseThrow();
+        assertThat(cheapest.bus().departureTime()).isEqualTo("202608250930");
+        // R03(새벽 5,000원)은 훨씬 싸지만 요청 시각과 너무 동떨어져 있어 "최저가"로는 추천되지 않는다.
+        assertThat(recs).noneMatch(r -> r.label().equals("최저가") && r.bus().departureTime().equals("202608252300"));
     }
 }

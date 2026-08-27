@@ -4,6 +4,7 @@ import com.fasterxml.jackson.databind.JsonNode;
 import com.fasterxml.jackson.databind.ObjectMapper;
 import com.malrota.config.TagoProperties;
 import com.malrota.dto.response.BusSchedule;
+import com.malrota.util.KoreanVowelFold;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -47,7 +48,9 @@ public class TagoClient {
         register("NAEK705", "부산", "해운대", "해운대터미널");
 
         // [대전권]
-        register("NAEK300", "대전", "대전복합", "동대전", "대전터미널");
+        // 다른 도시(부산종합/광주종합/인천종합 등)는 모두 "종합"을 쓰는데 대전만 공식 명칭이
+        // "복합"이라, 실제로 사용자가 다른 도시처럼 "대전종합"이라고 부르는 경우가 있어 별칭으로 등록한다.
+        register("NAEK300", "대전", "대전복합", "동대전", "대전터미널", "대전종합");
         register("NAEK310", "대전", "유성고속", "유성", "유성터미널", "충남대");
         register("NAEK305", "대전", "대전청사", "정부청사", "둔산");
 
@@ -124,10 +127,21 @@ public class TagoClient {
         return null;
     }
 
-    /** 완전 일치 -> 포함 일치 순으로 터미널 ID 탐색 (매칭 안 되면 null) */
+    /** 완전 일치 -> 모음 혼동 보정 일치 -> 포함 일치 순으로 터미널 ID 탐색 (매칭 안 되면 null) */
     private static String matchTerminalId(String clean) {
         if (clean == null || clean.isBlank()) return null;
         if (TERMINAL_MAP.containsKey(clean)) return TERMINAL_MAP.get(clean);
+
+        // 실제 보고된 사례: 음성 인식이 "센트럴시티"를 "샌트럴시티"로 받아쓴다. 현대 한국어 발음에서
+        // 근접 모음끼리 거의 구별되지 않아 STT가 자주 혼동하는 흔한 오인식 패턴이라, 특정 단어 하나를
+        // 별칭으로 추가하는 대신 모든 터미널명에 공통으로 적용되도록 일반화해서 고정한다.
+        String folded = KoreanVowelFold.fold(clean);
+        for (Map.Entry<String, String> entry : TERMINAL_MAP.entrySet()) {
+            if (KoreanVowelFold.fold(entry.getKey()).equals(folded)) {
+                return entry.getValue();
+            }
+        }
+
         for (Map.Entry<String, String> entry : TERMINAL_MAP.entrySet()) {
             if (clean.contains(entry.getKey()) || entry.getKey().contains(clean)) {
                 return entry.getValue();

@@ -6,7 +6,18 @@
   display: flex;
   flex-direction: column;
   gap: 14px;
-  min-height: 200px;
+}
+
+/* 대화 내용만 따로 스크롤되게 해서, 메시지가 쌓여도 마이크 버튼은 항상 화면에 바로 보이게 한다 */
+.chat-messages {
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+  max-height: 45vh;
+  min-height: 120px;
+  overflow-y: auto;
+  overscroll-behavior: contain;
+  padding-right: 4px;
 }
 
 /* 말풍선 한 줄 */

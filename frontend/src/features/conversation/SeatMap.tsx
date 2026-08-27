@@ -179,7 +179,7 @@ export function SeatMap({ seats, recommendedNo, alternativeNos, selectedNo, onSe
       <div style={{ marginTop: '16px', fontSize: '0.9rem', display: 'flex', gap: '20px', flexWrap: 'wrap' }}>
         <LegendItem color="#16a34a" label="추천 좌석" />
         {selectedList.length > 0 && <LegendItem color="#2563eb" label="선택한 좌석" />}
-        <LegendItem color="#86efac" label="같은 조건 좌석" />
+        {alternativeNos.length > 0 && <LegendItem color="#86efac" label="같은 조건 좌석" />}
         <LegendItem color="#f1f5f9" label="빈 자리" border />
         <LegendItem color="#cbd5e1" label="예약됨" />
       </div>

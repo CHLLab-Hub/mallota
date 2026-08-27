@@ -19,7 +19,7 @@ function formatDate(raw: string): string {
 
 export function ConfirmPage() {
   const {
-    selectedBus, seat, selectedSeatNo,
+    selectedBus, seat, selectedSeatNo, passengers,
     setScreen, addMessage, addBooking, resetMessages,
     setSelectedBus, setSeat, setSelectedSeatNo, setSessionId,
   } = useAppState()
@@ -32,19 +32,21 @@ export function ConfirmPage() {
   }
 
   const seatNo = selectedSeatNo ?? seat?.bestSeat?.seatNo ?? ''
+  // 요금은 예매 인원수만큼 곱해서 산출
+  const totalCharge = (selectedBus?.charge ?? 0) * Math.max(passengers, 1)
 
   // 화면 뜰 때 승차권 안내
   useEffect(() => {
     if (selectedBus && !announced.current) {
       announced.current = true
-      appSay(`${selectedBus.departure}에서 ${selectedBus.arrival}로 가는 ${formatTime(selectedBus.departureTime)} 출발 버스가 준비되었습니다. 좌석은 ${seatNo}번입니다. 결제할까요?`)
+      appSay(`${selectedBus.departure}에서 ${selectedBus.arrival}로 가는 ${formatTime(selectedBus.departureTime)} 출발 버스가 준비되었습니다. 좌석은 ${seatNo}번입니다. 결제 금액은 ${totalCharge.toLocaleString()}원입니다. 결제할까요?`)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
   function pay() {
     if (!selectedBus) return
-    addBooking({ bus: selectedBus, seatNo, id: Date.now().toString() })
+    addBooking({ bus: selectedBus, seatNo, passengers, totalCharge, id: Date.now().toString() })
     appSay('결제가 완료되었습니다. 안전한 여행 되세요.')
     setTimeout(() => {
       setSelectedBus(null)
@@ -117,7 +119,14 @@ export function ConfirmPage() {
             <div><span style={{ color: '#58665f' }}>날짜 </span>{formatDate(selectedBus.departureTime)}</div>
             <div><span style={{ color: '#58665f' }}>등급 </span>{selectedBus.grade}</div>
             <div><span style={{ color: '#58665f' }}>좌석 </span><b style={{ color: '#f07f21' }}>{seatNo}</b></div>
-            <div><span style={{ color: '#58665f' }}>요금 </span><b>{selectedBus.charge.toLocaleString()}원</b></div>
+            <div><span style={{ color: '#58665f' }}>인원 </span><b>{passengers}분</b></div>
+          </div>
+          <div style={{ borderTop: '1px dashed #f0d5b8', margin: '16px 0' }} />
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
+            <span style={{ color: '#58665f' }}>
+              {passengers > 1 ? `${selectedBus.charge.toLocaleString()}원 × ${passengers}명` : '요금'}
+            </span>
+            <b style={{ fontSize: '1.2rem' }}>{totalCharge.toLocaleString()}원</b>
           </div>
         </div>
 

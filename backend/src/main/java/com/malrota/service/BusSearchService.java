@@ -6,10 +6,12 @@ import com.malrota.dto.response.BusRecommendation;
 import com.malrota.dto.response.BusSchedule;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Optional;
 
 @Service
 public class BusSearchService {
@@ -43,7 +45,12 @@ public class BusSearchService {
                 .sorted(scheduleComparator(request))
                 .toList();
     }
-        /** 버스 3개 추천 (가장 가까운 시각 / 가장 저렴 / 근처 시각) */
+    /** "최저가" 후보를 우선 찾아보는 좁은 범위 (기준 시각 ±1시간) */
+    private static final int CHEAPEST_TIME_WINDOW_TIGHT_MINUTES = 60;
+    /** 좁은 범위에 아무것도 없을 때만 넓혀 보는 최대 범위 (기준 시각 ±2시간, 그 이상은 아무리 싸도 제외) */
+    private static final int CHEAPEST_TIME_WINDOW_WIDE_MINUTES = 120;
+
+    /** 버스 3개 추천 (가장 가까운 시각 / 가장 저렴 / 근처 시각) */
     public List<BusRecommendation> recommend(BusSearchRequest request) {
         List<BusSchedule> schedules = search(request); // 조회+정렬 재활용
         List<BusRecommendation> result = new ArrayList<>();
@@ -53,12 +60,16 @@ public class BusSearchService {
         BusSchedule best = schedules.get(0);
         result.add(new BusRecommendation(best, "말씀하신 시간과 가장 가까운 버스입니다.", "추천 시간"));
 
-        // 2. 가장 저렴한 버스
-        BusSchedule cheapest = schedules.stream()
-                .min(Comparator.comparingInt(BusSchedule::charge))
+        // 2. 가장 저렴한 버스 — "말씀하신 시간과 가장 가까운 버스"(best) 기준 ±1시간 이내에서 먼저
+        //    찾고, 그 안에 다른 버스가 아예 없을 때만 ±2시간까지 넓힌다. 그 이상 벗어나면 아무리
+        //    싸도 추천하지 않는다 — 그렇지 않으면 예매하려는 시간대와 동떨어진 새벽 첫차처럼 엉뚱한
+        //    시간의 버스가 "최저가"라고 잡혀버린다.
+        LocalTime bestTime = departureTime(best);
+        BusSchedule cheapest = cheapestWithin(schedules, bestTime, CHEAPEST_TIME_WINDOW_TIGHT_MINUTES)
+                .or(() -> cheapestWithin(schedules, bestTime, CHEAPEST_TIME_WINDOW_WIDE_MINUTES))
                 .orElse(best);
         if (!isSameBus(cheapest, best)) {
-            result.add(new BusRecommendation(cheapest, "가장 저렴한 버스입니다.", "최저가"));
+            result.add(new BusRecommendation(cheapest, "말씀하신 시간대와 가까우면서 가장 저렴한 버스입니다.", "최저가"));
         }
 
         // 3. 근처 시각 (1,2와 겹치지 않는 다음 버스)
@@ -69,6 +80,13 @@ public class BusSearchService {
             }
         }
         return result;
+    }
+
+    /** 기준 시각에서 windowMinutes 이내인 버스 중 가장 싼 것 (없으면 empty) */
+    private Optional<BusSchedule> cheapestWithin(List<BusSchedule> schedules, LocalTime anchor, int windowMinutes) {
+        return schedules.stream()
+                .filter(s -> Math.abs(Duration.between(anchor, departureTime(s)).toMinutes()) <= windowMinutes)
+                .min(Comparator.comparingInt(BusSchedule::charge));
     }
 
     private boolean isSameBus(BusSchedule a, BusSchedule b) {

@@ -1,6 +1,7 @@
 package com.malrota.service.nlu;
 
 import com.malrota.client.TagoClient;
+import com.malrota.util.KoreanVowelFold;
 import org.springframework.stereotype.Component;
 
 import java.time.DayOfWeek;
@@ -21,12 +22,16 @@ public class ConversationRuleExtractor {
             .sorted(Comparator.comparingInt(String::length).reversed())
             .map(Pattern::quote)
             .collect(Collectors.joining("|"));
-
+    // 출발지/도착지
     private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(?:출발(?:지)?[:\\s]*)?(" + TERMINALS + ")\\s*(?:에서|서|발)");
-    private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))");
+    private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))");
+    // 이미 확정한 터미널을 다른 터미널로 바꿔달라는 정정 표현
+    private static final Pattern CORRECTION_PATTERN = Pattern.compile("(?:말고|아니라|아니고)\\s*(" + TERMINALS + ")");
+    private static final Pattern REJECTED_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:말고|아니라|아니고)");
+    
     private static final Pattern GENERIC_DEP_PATTERN = Pattern.compile("([가-힣]{2,})(?:\\s*에서|(?<!에)서|발)(?![가-힣])");
     private static final Pattern GENERIC_ARR_PATTERN = Pattern.compile(
-            "([가-힣]{2,})\\s*(?:행|(?:로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))(?![가-힣])");
+            "([가-힣]{2,}?)\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))(?![가-힣])");
 
     private static final Pattern MONTH_DAY_PATTERN = Pattern.compile("(\\d{1,2})\\s*월\\s*(\\d{1,2})\\s*일");
     private static final Pattern NEXT_MONTH_DAY_PATTERN = Pattern.compile("다음\\s*달\\s*(\\d{1,2})\\s*일");
@@ -39,7 +44,7 @@ public class ConversationRuleExtractor {
     private static final Pattern NEXT_WEEKDAY_PATTERN = Pattern.compile("다음\\s*주\\s*([월화수목금토일])(?:요일)?");
     private static final Pattern WEEKDAY_PATTERN = Pattern.compile("(?:돌아오는|다가오는)?\\s*([월화수목금토일])요일");
     
-    // 시각의 시(hour)는 "8시"처럼 숫자로도, "여덟 시"/"한 시"처럼 순우리말 수사로도 말함
+    // 시각과 관련된 조건
     private static final Pattern TIME_PATTERN = Pattern.compile(
             "(새벽|아침|낮|점심|저녁|밤|심야|오전|오후)?\\s*(\\d{1,2}|열두|열한|다섯|여섯|일곱|여덟|아홉|한|두|세|네|열)\\s*시\\s*(?:(\\d{1,2})\\s*분|반)?");
     private static final Pattern PASSENGER_PATTERN = Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|분|식구)");
@@ -47,8 +52,7 @@ public class ConversationRuleExtractor {
     public RuleParse extract(String text, LocalDateTime baseDateTime) {
         String input = text == null ? "" : text.trim();
 
-        // 발화 전체가 등록된 터미널명/별칭 그 자체와 완전히 일치하는 경우("부산서부" 등 반문에 대한 단답)를 최우선으로 식별한다.
-        // 완전 일치를 먼저 확인해 이 오인식을 원천 차단하고, 방향 배정은 세션 문맥을 아는 ConversationParseService에 맡긴다.
+        // 발화 전체가 등록된 터미널명/별칭 그 자체와 완전히 일치하는 경우를 최우선으로 식별
         String wholeInputAsTerminal = findStandaloneTerminal(input);
         boolean isStandaloneTerminalToken = wholeInputAsTerminal != null
                 && TagoClient.allNamesAndAliases().contains(input.replaceAll("\\s+", ""));
@@ -78,7 +82,7 @@ public class ConversationRuleExtractor {
             }
         }
 
-        // 지명 표준명으로 정규화 (단, "서울"처럼 터미널이 여러 개인 도시명은 임의로 하나를 골라버리면
+        // 지명 표준명으로 정규화(단, "서울"처럼 터미널이 여러 개인 도시명은 임의로 하나를 골라버리면
         // 세부 터미널을 되묻는 흐름(TagoClient.isMultiTerminalCity)이 깨지므로 그대로 둔다)
         if (arrival != null) {
             arrival = canonicalizeTerminal(arrival);
@@ -86,8 +90,23 @@ public class ConversationRuleExtractor {
         if (departure != null) {
             departure = canonicalizeTerminal(departure);
         }
+        // "OO 말고 XX로" 정정 표현(공백을 잘못 끼워 넣는 경우가 있어 공백을 제거한 텍스트로 매칭)
+        String compactForCorrection = input.replaceAll("\\s+", "");
+        String correctionTerminal = find(CORRECTION_PATTERN, compactForCorrection);
+        if (correctionTerminal != null) {
+            correctionTerminal = canonicalizeTerminal(correctionTerminal);
+        }
+        // "말고" 앞쪽(정정 대상)도 등록된 터미널명으로 알아들어졌으면 함께 넘김 — "광주종합 말고 동대구로"
+        String rejectedTerminal = find(REJECTED_PATTERN, compactForCorrection);
+        if (rejectedTerminal != null) {
+            rejectedTerminal = canonicalizeTerminal(rejectedTerminal);
+        }
+
+        // "말고"/"아니라"/"아니고" 뒤쪽 텍스트만으로 판단하고, 정정 이전 텍스트는 해제
+        String textForTimeExtraction = afterLastCorrectionKeyword(input);
+
         // 날짜, 시간, 좌석, 약자, 인원 추출
-        DateTimeResolution resolution = resolveDateTime(input, baseDateTime);
+        DateTimeResolution resolution = resolveDateTime(textForTimeExtraction, baseDateTime);
         List<String> seats = extractSeatPreferences(input);
         List<String> needs = extractAccessibilityNeeds(input);
         int passengerCount = extractPassengers(input);
@@ -99,8 +118,8 @@ public class ConversationRuleExtractor {
                 arrival,
                 resolution.date(),
                 resolution.departureTime(),
-                timePreference(input, resolution.departureTime()),
-                servicePreference(input),
+                timePreference(textForTimeExtraction, resolution.departureTime()),
+                servicePreference(textForTimeExtraction),
                 busGradePreference(input),
                 passengerCount,
                 passengerMentioned,
@@ -109,25 +128,20 @@ public class ConversationRuleExtractor {
                 hasSeatPreferenceExpression(input),
                 hasAccessibilityExpression(input),
                 standalone,
+                correctionTerminal,
+                rejectedTerminal,
                 wantsEarlierBus(input),
                 wantsLaterBus(input)
         );
     }
 
     /**
-     * "더 빠른 거 없어?", "더 이른 시간대로" 처럼 방금 안내한 버스보다 더 이른 시간을 요청하는
-     * 상대적 표현인지 판별한다. "첫차"/"젤 빠른"(servicePreference=FIRST)과 달리 세션에 계속
-     * 남는 값이 아니라, 이번 발화 한 번에 대해서만 "이전에 보여준 버스보다 이르게"를 의미한다.
+     * 상대적 시간 표현 인식
      */
     private boolean wantsEarlierBus(String text) {
         return List.of("더 빠른", "더빠른", "더 이른", "더이른", "더 일찍", "더일찍", "조금 더 일찍", "좀 더 일찍", "당겨서", "더 당겨")
                 .stream().anyMatch(text::contains);
     }
-
-    /**
-     * "더 늦은 거 없어?", "더 나중 시간대로" 처럼 방금 안내한 버스보다 더 늦은 시간을 요청하는
-     * 상대적 표현인지 판별한다. wantsEarlierBus와 대칭이며 마찬가지로 세션에 남지 않는 1회성 신호다.
-     */
     private boolean wantsLaterBus(String text) {
         return List.of("더 늦은", "더늦은", "더 나중", "더나중", "조금 더 늦게", "좀 더 늦게", "미뤄서", "더 미뤄", "뒤로 미뤄")
                 .stream().anyMatch(text::contains);
@@ -135,8 +149,8 @@ public class ConversationRuleExtractor {
 
     /**
      * 지명 표준명 정규화. "서울", "대전"처럼 터미널이 여럿인 도시명 그 자체는 그대로 두어
-     * ConversationParseService가 세부 터미널을 되묻도록 한다. "강남", "동대구"처럼 특정
-     * 터미널(별칭)을 콕 집은 경우에만 정식 명칭으로 치환한다.
+     * ConversationParseService가 세부 터미널을 되묻도록 하고 "강남", "동대구"처럼 특정
+     * 터미널(별칭)을 콕 집은 경우에만 정식 명칭으로 치환
      */
     private String canonicalizeTerminal(String raw) {
         if (TagoClient.isMultiTerminalCity(raw)) return raw;
@@ -195,8 +209,8 @@ public class ConversationRuleExtractor {
             int hour = koreanHourToNumber(timeMatcher.group(2));
             int minute = text.contains("반") ? 30 : (timeMatcher.group(3) != null ? Integer.parseInt(timeMatcher.group(3)) : 0);
 
-            // ampm은 "8시"처럼 오전/오후 표현 없이 시각만 말한 경우 null일 수 있다 (List.of(...).contains(null)은
-            // NullPointerException을 던지므로 반드시 null 체크 후에 검사해야 한다).
+            // ampm은 "8시"처럼 오전/오후 표현 없이 시각만 말한 경우 null일 수 있음 (List.of(...).contains(null)은
+            // NullPointerException을 던지므로 반드시 null 체크 후에 검사)
             if (ampm != null && List.of("오후", "저녁", "밤", "심야").contains(ampm) && hour < 12) hour += 12;
             else if (ampm != null && List.of("낮", "점심").contains(ampm) && hour <= 6) hour += 12;
             else if (ampm != null && List.of("오전", "새벽", "아침").contains(ampm) && hour == 12) hour = 0;
@@ -228,10 +242,11 @@ public class ConversationRuleExtractor {
 
     private LocalDate resolveWeekdayOrRelativeDay(String text, LocalDateTime base, LocalDate current) {
         LocalDate baseDate = base.toLocalDate();
-        if (text.contains("그글피")) return baseDate.plusDays(4);
-        if (text.contains("글피")) return baseDate.plusDays(3);
-        if (text.contains("모레")) return baseDate.plusDays(2);
-        if (text.contains("내일")) return baseDate.plusDays(1);
+        // KoreanVowelFold를 참고
+        if (KoreanVowelFold.contains(text, "그글피")) return baseDate.plusDays(4);
+        if (KoreanVowelFold.contains(text, "글피")) return baseDate.plusDays(3);
+        if (KoreanVowelFold.contains(text, "모레")) return baseDate.plusDays(2);
+        if (KoreanVowelFold.contains(text, "내일")) return baseDate.plusDays(1);
         if (text.contains("오늘")) return baseDate;
         
         if (text.contains("이번 주말") || text.contains("이번주말")) {
@@ -272,10 +287,15 @@ public class ConversationRuleExtractor {
     private int extractPassengers(String text) {
         if (text == null || text.isBlank()) return 0;
 
+        // 인원수를 정정하는 문장 인식
         Matcher digitMatcher = PASSENGER_PATTERN.matcher(text);
-        if (digitMatcher.find()) {
+        String lastVal = null;
+        while (digitMatcher.find()) {
+            lastVal = digitMatcher.group(1);
+        }
+        if (lastVal != null) {
             try {
-                String val = digitMatcher.group(1);
+                String val = lastVal;
                 return switch (val) {
                     case "한", "하나" -> 1;
                     case "두", "둘" -> 2;
@@ -307,12 +327,13 @@ public class ConversationRuleExtractor {
 
     private List<String> extractSeatPreferences(String text) {
         List<String> result = new ArrayList<>();
-        if (!text.contains("창가 말고") && !text.contains("창가말고") && text.contains("창가")) result.add("WINDOW");
-        if (text.contains("통로")) result.add("AISLE");
-        if (List.of("앞쪽", "앞 자리", "앞자리", "앞좌석").stream().anyMatch(text::contains)) result.add("FRONT");
-        if (text.contains("중간")) result.add("MIDDLE");
-        if (List.of("뒤쪽", "뒷자리", "뒷좌석").stream().anyMatch(text::contains)) result.add("BACK");
-        if (text.contains("혼자") || text.contains("단독")) result.add("SINGLE");
+        // 음절 사이의 공백으로 인해 다른 단어로 인식하는 경우에 의한 오류 수정
+        if (mentionedAndNotRejected(text, "창가")) result.add("WINDOW");
+        if (mentionedAndNotRejected(text, "통로")) result.add("AISLE");
+        if (List.of("앞쪽", "앞자리", "앞좌석").stream().anyMatch(k -> mentionedAndNotRejected(text, k))) result.add("FRONT");
+        if (mentionedAndNotRejected(text, "중간")) result.add("MIDDLE");
+        if (List.of("뒤쪽", "뒷쪽", "뒷자리", "뒷좌석").stream().anyMatch(k -> mentionedAndNotRejected(text, k))) result.add("BACK");
+        if (List.of("혼자", "단독").stream().anyMatch(k -> mentionedAndNotRejected(text, k))) result.add("SINGLE");
         return result;
     }
 
@@ -347,17 +368,48 @@ public class ConversationRuleExtractor {
     }
 
     private String servicePreference(String text) {
-        // "저차", "쳐차"는 음성 인식이 "첫차"를 잘못 받아적은 흔한 오인식 표기다 (실제 사용자 보고 사례).
-        if (List.of("첫차", "저차", "쳐차", "시방", "싸게싸게", "젤 빠른", "일찍이").stream().anyMatch(text::contains)) return "FIRST";
-        if (text.contains("막차")) return "LAST";
+        // 첫차/막차에 대한 음성 인식 오류로 인한 인식 불가 수정
+        String compact = text.replaceAll("\\s+", "");
+        if (List.of("첫차", "저차", "쳐차", "시방", "싸게싸게", "일찍이").stream().anyMatch(compact::contains)
+                || List.of("젤 빠른", "가장 빠른", "제일 빠른").stream().anyMatch(text::contains)) {
+            return "FIRST";
+        }
+        if (compact.contains("막차")) return "LAST";
         return null;
     }
 
     private String busGradePreference(String text) {
-        if (text.contains("우등") && !text.contains("우등 말고")) return "EXCELLENT";
-        if (List.of("프리미엄", "비싼 놈", "제일 좋은", "누워서", "억수로 편한").stream().anyMatch(text::contains)) return "PREMIUM";
-        if (List.of("일반", "고속", "싼 놈", "싼 거", "젤 싼", "제일 싼", "저렴한", "가성비").stream().anyMatch(text::contains)) return "GENERAL";
+        if (mentionedAndNotRejected(text, "우등")) return "EXCELLENT";
+        if (List.of("프리미엄", "비싼 놈", "제일 좋은", "누워서", "억수로 편한").stream().anyMatch(k -> mentionedAndNotRejected(text, k))) return "PREMIUM";
+        if (List.of("일반", "고속", "싼 놈", "싼 거", "젤 싼", "제일 싼", "저렴한", "가성비").stream().anyMatch(k -> mentionedAndNotRejected(text, k))) return "GENERAL";
         return null;
+    }
+
+    // "말고"/"아니라"/"아니고" 뒤쪽만 골라내는 용도
+    private static final Pattern CORRECTION_KEYWORD_PATTERN = Pattern.compile("말고|아니라|아니고");
+    // keyword 바로 뒤(공백 허용)에 정정 키워드가 붙어 있으면 그 keyword 자체가 거부된 것으로 봄
+    private static final Pattern IMMEDIATE_REJECTION_PATTERN = Pattern.compile("^\\s*(말고|아니라|아니고)");
+
+    /** "말고"/"아니라"/"아니고" 뒤쪽 텍스트만 반환 (없으면 원문 그대로) */
+    private String afterLastCorrectionKeyword(String text) {
+        Matcher matcher = CORRECTION_KEYWORD_PATTERN.matcher(text);
+        int lastEnd = -1;
+        while (matcher.find()) {
+            lastEnd = matcher.end();
+        }
+        return lastEnd < 0 ? text : text.substring(lastEnd);
+    }
+
+    /**
+     * text와 keyword 모두 공백을 제거해서 확인하고, 정정값과 정정 이전값이 같이 잡히지 않도록
+     */
+    private boolean mentionedAndNotRejected(String text, String keyword) {
+        String compactText = text.replaceAll("\\s+", "");
+        String compactKeyword = keyword.replaceAll("\\s+", "");
+        int idx = compactText.indexOf(compactKeyword);
+        if (idx < 0) return false;
+        String after = compactText.substring(idx + compactKeyword.length());
+        return !IMMEDIATE_REJECTION_PATTERN.matcher(after).find();
     }
 
     private String find(Pattern pattern, String text) {
@@ -401,6 +453,8 @@ public class ConversationRuleExtractor {
         boolean seatPreferenceMentioned,
         boolean accessibilityMentioned,
         String standaloneTerminal,
+        String correctionTerminal,
+        String rejectedTerminal,
         boolean wantsEarlierBus,
         boolean wantsLaterBus
     ) {}

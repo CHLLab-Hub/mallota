@@ -104,8 +104,8 @@ class SeatRecommendServiceTest {
     }
 
     @Test
-    @DisplayName("5. 통로를 사이에 둔 B-C는 연석이 아니므로 연석 배정 대신 개별 좌석으로 폴백")
-    void does_not_treat_seats_across_the_aisle_as_a_pair() {
+    @DisplayName("5. 통로를 사이에 둔 B-C는 연석이 아니라서 나란히/앞뒤 배치가 안 되면 따로라도 두 분 다 배정")
+    void does_not_treat_seats_across_the_aisle_as_a_true_pair_but_still_seats_both() {
         SeatRecommendService service = serviceWith(List.of(
                 seat("3B", 3, 2, "MIDDLE", true),
                 seat("3C", 3, 3, "MIDDLE", true)
@@ -113,23 +113,44 @@ class SeatRecommendServiceTest {
 
         var result = service.recommend(new SeatRecommendRequest("우등", List.of(), List.of(), 2));
 
-        assertThat(result.adjacentPair()).isFalse();
+        // 나란히도 앞뒤로도 붙은 자리가 없으니 연석이라고 속이지 않고, 대신 두 분 모두 자리는 받는다.
+        assertThat(result.bestSeat()).isNotNull();
+        assertThat(result.alternatives()).hasSize(1);
+        assertThat(result.reasons()).anyMatch(r -> r.contains("따로"));
     }
 
     @Test
-    @DisplayName("6. 뒤쪽 연석이 매진되면 앞쪽이 아니라 뒤쪽에서 가장 가까운 연석을 추천")
-    void falls_back_to_the_pair_closest_to_the_requested_section() {
-        // 7~9줄(뒤쪽) 연석은 모두 매진, 앞쪽 1줄과 중간 5줄 연석만 남은 상황
+    @DisplayName("6. 뒤쪽에 연석이 없어도, 엉뚱한 다른 구역의 연석보다 뒤쪽 안에서 따로 배정하는 걸 우선한다")
+    void prefers_separate_seats_within_requested_section_over_a_pair_in_another_section() {
+        // 7~9줄(뒤쪽)은 나란히/앞뒤 연석은 없지만 따로 앉을 자리(7A,7C,8A,8C,9A,9C)는 남아있고,
+        // 앞쪽 1줄과 중간 5줄에는 연석이 남아있는 상황. "뒷자리로 주세요"라고 했는데 앞쪽/중간에
+        // 연석이 있다는 이유만으로 그쪽이 나와버리면 안 된다 — 뒤쪽 안에서 따로라도 배정해야 한다.
         SeatRecommendService service = serviceWith(excellentLayout(
                 "2A", "3A", "4A", "6A", "7B", "8B", "9B"
         ));
 
         var result = service.recommend(new SeatRecommendRequest("우등", List.of("BACK"), List.of(), 2));
 
-        // 남은 연석은 1줄과 5줄뿐 → 뒤쪽에서 더 가까운 5A, 5B 를 골라야 한다
-        assertThat(result.bestSeat().seatNo()).isEqualTo("5A");
-        assertThat(result.alternatives()).extracting(Seat::seatNo).containsExactly("5B");
-        assertThat(result.reasons()).anyMatch(r -> r.contains("뒤쪽에는 나란히 앉으실 자리가 없어") && r.contains("5A, 5B"));
+        // 뒤쪽 안에서 뒤쪽에 가장 가까운 9A, 9C를 따로 배정해야 한다
+        assertThat(result.bestSeat().seatNo()).isEqualTo("9A");
+        assertThat(result.alternatives()).extracting(Seat::seatNo).containsExactly("9C");
+        assertThat(result.reasons()).anyMatch(r -> r.contains("뒤쪽") && r.contains("따로"));
+    }
+
+    @Test
+    @DisplayName("6-1. 원하는 구역이 통째로 매진이면(따로도 불가) 가장 가까운 다른 구역의 연석으로 폴백")
+    void falls_back_to_pair_in_another_section_when_preferred_section_is_completely_sold_out() {
+        // 뒤쪽(7~9줄)이 통째로 매진이라 "뒤쪽 안에서 따로"조차 불가능한 상황
+        SeatRecommendService service = serviceWith(excellentLayout(
+                "7A", "7B", "7C", "8A", "8B", "8C", "9A", "9B", "9C"
+        ));
+
+        var result = service.recommend(new SeatRecommendRequest("우등", List.of("BACK"), List.of(), 2));
+
+        // 뒤쪽에는 자리가 아예 없으므로, 남은 자리 중 뒤쪽에 가장 가까운 6줄 연석으로 폴백
+        assertThat(result.bestSeat().seatNo()).isEqualTo("6A");
+        assertThat(result.alternatives()).extracting(Seat::seatNo).containsExactly("6B");
+        assertThat(result.reasons()).anyMatch(r -> r.contains("뒤쪽에는 나란히 앉으실 자리가 없어") && r.contains("6A, 6B"));
     }
 
     @Test
@@ -197,5 +218,87 @@ class SeatRecommendServiceTest {
         // 사각형이 없으므로 같은 줄 3인 배치(1A,1B,1C)로 폴백
         assertThat(result.bestSeat().seatNo()).isEqualTo("1A");
         assertThat(result.alternatives()).extracting(Seat::seatNo).containsExactly("1B", "1C");
+    }
+
+    @Test
+    @DisplayName("11. 명시적으로 뒷좌석을 요청하면, 함께 추론된 ELDERLY_CARE(앞쪽 선호)보다 우선한다")
+    void explicit_back_preference_overrides_inferred_elderly_care_front_bias() {
+        // "할머니 모시고" 같은 말에서 ELDERLY_CARE가 자동으로 추론되어도, 사용자가 명시적으로
+        // "뒷좌석으로 주세요"라고 하면 그 명시적 요청이 우선해야 한다 (앞좌석이 나오면 안 됨).
+        SeatRecommendService service = serviceWith(List.of(
+                new Seat("1A", 1, 1, "FRONT", "AISLE", true),
+                new Seat("8B", 8, 2, "BACK", "WINDOW", true)
+        ));
+
+        var result = service.recommend(new SeatRecommendRequest(
+                "우등", List.of("BACK"), List.of("ELDERLY_CARE"), 1));
+
+        assertThat(result.bestSeat().seatNo()).isEqualTo("8B");
+        assertThat(result.reasons()).contains("뒷좌석을 선호하셔서 뒤쪽 좌석입니다.");
+    }
+
+    @Test
+    @DisplayName("12. 가로 연석이 전혀 없는 등급(프리미엄 등)에서는 세로(앞뒤) 연석으로 2인 배정")
+    void falls_back_to_vertical_pair_when_no_horizontal_pair_exists() {
+        // 프리미엄처럼 통로 건너편이 매줄 홀로 좌석인 배치를 흉내낸다: 각 줄에 A(창가,통로쪽아님)만
+        // 있고 옆자리가 없어 가로 연석이 원천적으로 불가능하다.
+        SeatRecommendService service = serviceWith(List.of(
+                seat("1A", 1, 1, "FRONT", true),
+                seat("2A", 2, 1, "FRONT", true),
+                seat("3A", 3, 1, "MIDDLE", true)
+        ));
+
+        var result = service.recommend(new SeatRecommendRequest("프리미엄", List.of(), List.of(), 2));
+
+        assertThat(result.bestSeat().seatNo()).isEqualTo("1A");
+        assertThat(result.adjacentPair()).isTrue();
+        assertThat(result.alternatives()).extracting(Seat::seatNo).containsExactly("2A");
+        assertThat(result.reasons()).anyMatch(r -> r.contains("앞뒤로 붙은 자리"));
+    }
+
+    @Test
+    @DisplayName("13. 3명 예매에서 뒤쪽에 같은 줄 3인 배치가 없어도, 뒤쪽 안에서 따로라도 세 자리를 배정한다")
+    void prefers_separate_seats_within_requested_section_for_three_passengers() {
+        // 뒤쪽 세 줄 모두 통로 자리(B)만 매진 → 같은 줄 3인 배치는 불가능하지만 A/C는 남아있음.
+        // 앞쪽에는 같은 줄 3인 배치가 그대로 남아있지만, "뒷자리" 요청이므로 뒤쪽을 지켜야 한다.
+        SeatRecommendService service = serviceWith(excellentLayout("7B", "8B", "9B"));
+
+        var result = service.recommend(new SeatRecommendRequest("우등", List.of("BACK"), List.of(), 3));
+
+        assertThat(result.bestSeat()).isNotNull();
+        assertThat(result.alternatives()).hasSize(2);
+        assertThat(result.alternatives()).allMatch(s -> s.position().equals("BACK"));
+        assertThat(result.bestSeat().position()).isEqualTo("BACK");
+        assertThat(result.reasons()).anyMatch(r -> r.contains("뒤쪽") && r.contains("따로"));
+    }
+
+    @Test
+    @DisplayName("14-1. 점수가 동률인 다른 연석은 '같은 조건 좌석'으로 함께 보여준다")
+    void includes_tied_pairs_as_same_condition_alternatives() {
+        // 5줄을 통째로 매진시켜서, 목표 줄(5줄)과 똑같이 한 줄 떨어진 4줄과 6줄 연석이 정확히 동점이
+        // 되게 만든다 — 배정받은 연석 말고 동등하게 좋은 다른 연석이 어디 있는지 보여줘야 한다.
+        SeatRecommendService service = serviceWith(excellentLayout("5A", "5B", "5C"));
+
+        var result = service.recommend(new SeatRecommendRequest("우등", List.of(), List.of("MOTION_SICKNESS"), 2));
+
+        assertThat(result.bestSeat().seatNo()).isEqualTo("4A");
+        assertThat(result.alternatives()).extracting(Seat::seatNo).containsExactly("4B");
+        assertThat(result.tiedAlternativeSeats()).extracting(Seat::seatNo).containsExactlyInAnyOrder("6A", "6B");
+    }
+
+    @Test
+    @DisplayName("14. 1인 예매에서 뒷자리가 매진이면, 좌석 생성 순서상 우연히 앞자리를 주지 않고 뒤쪽에 가장 가까운 좌석을 추천")
+    void single_passenger_falls_back_to_closest_seat_when_requested_section_is_sold_out() {
+        SeatRecommendService service = serviceWith(List.of(
+                new Seat("1A", 1, 1, "FRONT", "AISLE", true),
+                new Seat("5A", 5, 1, "MIDDLE", "WINDOW", true),
+                new Seat("9A", 9, 1, "BACK", "WINDOW", false)
+        ));
+
+        var result = service.recommend(new SeatRecommendRequest("우등", List.of("BACK"), List.of(), 1));
+
+        // 뒷좌석이 매진이라도, 목록상 처음 나오는 1A가 아니라 뒤쪽에 가장 가까운 5A가 나와야 한다.
+        assertThat(result.bestSeat().seatNo()).isEqualTo("5A");
+        assertThat(result.reasons()).anyMatch(r -> r.contains("가장 가까운"));
     }
 }
