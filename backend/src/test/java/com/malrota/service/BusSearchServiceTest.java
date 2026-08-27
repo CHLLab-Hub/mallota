@@ -13,6 +13,77 @@ import static org.assertj.core.api.Assertions.assertThat;
 class BusSearchServiceTest {
 
     @Test
+    void reports_no_route_when_the_two_terminals_have_zero_schedules() {
+        // 우리는 직행 노선만 다룬다. 이 두 터미널 사이에 그날 배차가 아예 없으면(조건이 안 맞는 게
+        // 아니라 노선 자체가 없는 경우) hasAnyScheduleBetween이 false를 반환해서, 호출한 쪽이
+        // "노선이 없습니다"와 "조건에 맞는 버스가 없습니다"를 구분해서 안내할 수 있어야 한다.
+        TagoClient client = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of();
+            }
+        };
+
+        BusSearchService service = new BusSearchService(client);
+        BusSearchRequest request = new BusSearchRequest("서울", "완도", "2026-08-28", "09:00", "ANY", "ANY", "ANY");
+
+        assertThat(service.recommend(request)).isEmpty();
+        assertThat(service.hasAnyScheduleBetween(request)).isFalse();
+    }
+
+    @Test
+    void distinguishes_no_route_from_no_bus_matching_the_requested_time() {
+        // 노선 자체는 있는데(그날 배차가 존재) 요청한 시각 근처에는 버스가 없는 경우 —
+        // 이건 "노선이 없다"가 아니라 "그 시간엔 버스가 없다"로 구분해야 한다.
+        TagoClient client = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of(schedule("R01", "202608280600", 16_000)); // 요청 시각(21:00)과 15시간 차이
+            }
+        };
+
+        BusSearchService service = new BusSearchService(client);
+        BusSearchRequest request = new BusSearchRequest("서울", "대전", "2026-08-28", "21:00", "ANY", "ANY", "ANY");
+
+        assertThat(service.recommend(request)).isEmpty();
+        assertThat(service.hasAnyScheduleBetween(request)).isTrue();
+    }
+
+    @Test
+    void premium_grade_filter_excludes_the_pricier_late_night_premium_variant() {
+        // 실제로 보고된 사고: 앱에서 보이는 "프리미엄" 요금이 실제(TAGO)와 다른 것 같다는 문의.
+        // 원인은 TAGO가 "심야프리미엄"(52,600원)을 "프리미엄"(43,900원)과는 별도의, 더 비싼 등급으로
+        // 취급하는데 grade.contains("프리미엄")만 쓰면 "심야프리미엄"도 같이 걸려서, 같은 "프리미엄"
+        // 요청인데 카드마다 요금이 다르게 나오는 사고로 이어졌다. "우등"/"심야우등"도 동일한 문제였다.
+        TagoClient client = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of(
+                        new BusSchedule("R01", "프리미엄", "서울경부", "부산", "202608280900", "202608281300", 43_900),
+                        new BusSchedule("R02", "심야프리미엄", "서울경부", "부산", "202608280910", "202608281310", 52_600),
+                        new BusSchedule("R03", "우등", "서울경부", "부산", "202608280920", "202608281320", 39_700),
+                        new BusSchedule("R04", "심야우등", "서울경부", "부산", "202608280930", "202608281330", 47_600)
+                );
+            }
+        };
+
+        BusSearchService service = new BusSearchService(client);
+
+        var premiumOnly = service.search(new BusSearchRequest(
+                "서울", "부산", "2026-08-28", "09:00", "ANY", "ANY", "PREMIUM"));
+        assertThat(premiumOnly).extracting(BusSchedule::grade).containsOnly("프리미엄");
+        assertThat(premiumOnly).extracting(BusSchedule::charge).containsOnly(43_900);
+
+        var excellentOnly = service.search(new BusSearchRequest(
+                "서울", "부산", "2026-08-28", "09:00", "ANY", "ANY", "EXCELLENT"));
+        assertThat(excellentOnly).extracting(BusSchedule::grade).containsOnly("우등");
+        assertThat(excellentOnly).extracting(BusSchedule::charge).containsOnly(39_700);
+    }
+
+    @Test
     void places_the_bus_closest_to_requested_departure_time_first() {
         TagoClient client = new TagoClient(null) {
             @Override

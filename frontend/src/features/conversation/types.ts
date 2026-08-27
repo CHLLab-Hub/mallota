@@ -35,6 +35,11 @@ export interface BusRecommendation {
   labels: string[]
 }
 
+export interface BusRecommendResponse {
+  recommendations: BusRecommendation[]
+  routeExists: boolean // false면 조건이 아니라 이 출발지-도착지 사이에 직행 노선 자체가 없다는 뜻
+}
+
 // 백엔드 PostgreSQL에 저장되는 예매 내역 형식
 export interface Booking {
   id: string

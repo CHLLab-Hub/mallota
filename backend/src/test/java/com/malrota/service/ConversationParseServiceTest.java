@@ -394,7 +394,7 @@ class ConversationParseServiceTest {
         ConversationSession session = new ConversationSession("s1");
         session.mergeConditions("센트럴시티", "대전", "2026-08-28", "09:00", "MORNING", "ANY", "ANY",
                 1, List.of(), List.of(),
-                "대전 어느 터미널로 원하시나요? 대전복합, 유성고속, 대전청사 중 편하신 곳을 말씀해 주세요.");
+                "대전 어느 터미널로 원하시나요? 대전복합, 대전청사 중 편하신 곳을 말씀해 주세요.");
 
         ConversationParseResponse r = service.parse(new ConversationParseRequest("센트럴시티", "s1"), session);
 

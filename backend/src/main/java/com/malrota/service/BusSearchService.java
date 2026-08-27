@@ -43,6 +43,13 @@ public class BusSearchService {
 
     /** 출발지/도착지/날짜로 운행편을 조회하고 등급만 필터링한, 시간창 적용 전의 원본 목록 */
     private List<BusSchedule> gradeFilteredSchedules(BusSearchRequest request) {
+        return rawSchedules(request).stream()
+                .filter(schedule -> matchesGrade(schedule, request.busGradePreference()))
+                .toList();
+    }
+
+    /** 등급/시간 조건 적용 전, 출발지-도착지 사이에 그날 실제로 존재하는 모든 배차 원본 목록 */
+    private List<BusSchedule> rawSchedules(BusSearchRequest request) {
         // 필수값(출발지, 도착지, 날짜) null 체크 방어 (14시 버스 에러 방지)
         if (request == null || !hasText(request.departure()) || !hasText(request.arrival()) || !hasText(request.date())) {
             return List.of();
@@ -58,10 +65,16 @@ public class BusSearchService {
         // 날짜 포맷 변환 (2026-08-24 → 20260824)
         String date = request.date().replace("-", "");
 
-        List<BusSchedule> schedules = tagoClient.searchBuses(depId, arrId, date);
-        return schedules.stream()
-                .filter(schedule -> matchesGrade(schedule, request.busGradePreference()))
-                .toList();
+        return tagoClient.searchBuses(depId, arrId, date);
+    }
+
+    /**
+     * 등급/시간 조건과 무관하게, 이 출발지-도착지 사이에 그날 배차가 하나라도 있는지 확인한다.
+     * 우리는 직행 노선만 다루므로, 이게 false면 두 도시 사이에 직행 버스가 아예 없다는 뜻이다
+     * (조건에 안 맞는 게 아니라 노선 자체가 없는 경우와 구분하기 위한 용도).
+     */
+    public boolean hasAnyScheduleBetween(BusSearchRequest request) {
+        return !rawSchedules(request).isEmpty();
     }
 
     /**
@@ -212,9 +225,12 @@ public class BusSearchService {
     private boolean matchesGrade(BusSchedule schedule, String preference) {
         if (!hasText(preference) || "ANY".equalsIgnoreCase(preference)) return true;
         String grade = schedule.grade() == null ? "" : schedule.grade();
+        // TAGO는 "심야우등"/"심야프리미엄"을 각각 "우등"/"프리미엄"과는 다른 요금(더 비쌈)의 별도
+        // 등급으로 취급한다. 단순 contains만 쓰면 "심야프리미엄"도 "프리미엄" 요청에 같이 잡혀서,
+        // 같은 등급을 요청했는데 카드마다 요금이 다르게 보이는 사고가 난다.
         return switch (preference.toUpperCase()) {
-            case "EXCELLENT" -> grade.contains("우등");
-            case "PREMIUM" -> grade.contains("프리미엄");
+            case "EXCELLENT" -> grade.contains("우등") && !grade.startsWith("심야");
+            case "PREMIUM" -> grade.contains("프리미엄") && !grade.startsWith("심야");
             case "GENERAL" -> grade.contains("일반") || grade.contains("고속");
             default -> true;
         };

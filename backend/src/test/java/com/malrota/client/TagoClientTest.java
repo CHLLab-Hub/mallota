@@ -115,4 +115,88 @@ class TagoClientTest {
         assertThat(client.findTerminalId("대구용계")).isEqualTo("NAEK807");
         assertThat(client.findTerminalId("대구서부")).isEqualTo("NAEK807");
     }
+
+    @Test
+    @DisplayName("\"천안\"/\"원주\"는 지명 대조 재검증에서 발견된 실제 ID로 매핑되고, \"유성\"은 실배차가 없어 제거되었다")
+    void resolves_cheonan_and_wonju_after_re_verifying_place_names_and_drops_unconfirmed_yuseong() {
+        // 재검증 중 발견한 사고 2건: 기존 "천안고속"(NAEK340)은 실제로는 "아산온양"행 노선이었고
+        // (진짜 천안은 NAEK310, 서울행 109건), 기존 "원주고속"(NAEK210)은 실제로는 "동해"행 노선
+        // 이었다(진짜 원주는 NAEK240, 서울행 100건). 둘 다 서울행 배차 건수는 있었지만 실제 지명을
+        // 대조하지 않아서 놓쳤던 것. 그리고 NAEK310이 원래 "유성고속"으로 등록돼 있었는데, 실제
+        // "유성"(NAEK360, 유성복합)은 서울/대전 어디와도 실배차가 0건이라 등록에서 제거했다.
+        assertThat(client.findTerminalId("천안")).isEqualTo("NAEK310");
+        assertThat(client.findTerminalId("원주")).isEqualTo("NAEK240");
+        assertThat(client.findTerminalId("유성")).isNotEqualTo("NAEK310");
+    }
+
+    @Test
+    @DisplayName("\"마산\"은 실제로는 \"울산\"이었던 NAEK715가 아니라 진짜 마산인 NAEK705로 매핑된다")
+    void resolves_masan_to_the_real_terminal_id_not_the_ulsan_mixup() {
+        // 새로 광역시급 도시를 추가하려고 전체 터미널 목록을 훑다가 발견한 사고: 기존 "마산고속"이
+        // NAEK715로 등록돼 있었는데, 실제 배차 데이터를 확인해보니 NAEK715는 전부 "울산"행 노선이었다
+        // (진짜 마산은 NAEK705). 서울행 배차 건수가 있다는 것만 확인하고 실제 지명(depPlaceNm/
+        // arrPlaceNm)까지는 대조하지 않아서 놓쳤던 것 — 이번엔 지명까지 대조해서 확인했다.
+        assertThat(client.findTerminalId("마산")).isEqualTo("NAEK705");
+    }
+
+    @Test
+    @DisplayName("새로 추가한 광역시/도청소재지급 도시들이 실제 배차가 확인된 ID로 매핑된다")
+    void resolves_newly_added_major_cities_to_verified_real_ids() {
+        assertThat(client.findTerminalId("울산")).isEqualTo("NAEK715");
+        assertThat(client.findTerminalId("춘천")).isEqualTo("NAEK250");
+        assertThat(client.findTerminalId("세종")).isEqualTo("NAEK352");
+        assertThat(client.findTerminalId("진주")).isEqualTo("NAEK722");
+        assertThat(client.findTerminalId("여수")).isEqualTo("NAEK510");
+        assertThat(client.findTerminalId("순천")).isEqualTo("NAEK515");
+        assertThat(client.findTerminalId("목포")).isEqualTo("NAEK505");
+        assertThat(client.findTerminalId("경주")).isEqualTo("NAEK815");
+        assertThat(client.findTerminalId("안동")).isEqualTo("NAEK840");
+        assertThat(client.findTerminalId("김해")).isEqualTo("NAEK735");
+        assertThat(client.findTerminalId("구미")).isEqualTo("NAEK810");
+        assertThat(client.findTerminalId("통영")).isEqualTo("NAEK730");
+    }
+
+    @Test
+    @DisplayName("전체 453개 터미널 전수조사에서 실배차가 확인된 32개 도시가 실제 ID로 매핑된다")
+    void resolves_terminals_found_in_the_full_nationwide_audit_to_verified_real_ids() {
+        // 티머니고에는 있는데 우리 앱엔 없는 터미널이 많다는 지적을 받고, TAGO 전체 453개 터미널을
+        // 서울/부산/대전 3개 거점으로 전수조사했다. 실배차가 확인된 143개 중 이미 등록된 33개를 뺀
+        // 111개 후보에서, 이미 등록된 도시의 하위 정류소/대학교/휴게소를 제외하고 독립된 시/군만
+        // 골라 배차 건수 순으로 32개를 추가했다.
+        assertThat(client.findTerminalId("평택")).isEqualTo("NAEK180");
+        assertThat(client.findTerminalId("아산")).isEqualTo("NAEK340");
+        assertThat(client.findTerminalId("양양")).isEqualTo("NAEK270");
+        assertThat(client.findTerminalId("공주")).isEqualTo("NAEK320");
+        assertThat(client.findTerminalId("안성")).isEqualTo("NAEK130");
+        assertThat(client.findTerminalId("제천")).isEqualTo("NAEK450");
+        assertThat(client.findTerminalId("여주")).isEqualTo("NAEK140");
+        assertThat(client.findTerminalId("횡성")).isEqualTo("NAEK238");
+        assertThat(client.findTerminalId("용인")).isEqualTo("NAEK150");
+        assertThat(client.findTerminalId("이천")).isEqualTo("NAEK160");
+        assertThat(client.findTerminalId("삼척")).isEqualTo("NAEK220");
+        // "동해"와 "공주"는 예전에 각각 "원주고속"/"청주고속"으로 잘못 등록됐던 ID(NAEK210/NAEK320)의
+        // 진짜 정체였다 — 이미 확인된 데이터라 그대로 재사용했다.
+        assertThat(client.findTerminalId("동해")).isEqualTo("NAEK210");
+        assertThat(client.findTerminalId("상주")).isEqualTo("NAEK825");
+        assertThat(client.findTerminalId("영주")).isEqualTo("NAEK835");
+        assertThat(client.findTerminalId("문경")).isEqualTo("NAEK850");
+        assertThat(client.findTerminalId("금산")).isEqualTo("NAEK330");
+        assertThat(client.findTerminalId("태안")).isEqualTo("NAEK394");
+        assertThat(client.findTerminalId("예천")).isEqualTo("NAEK851");
+        assertThat(client.findTerminalId("광양")).isEqualTo("NAEK520");
+        assertThat(client.findTerminalId("포천")).isEqualTo("NAEK146");
+        assertThat(client.findTerminalId("철원")).isEqualTo("NAEK148");
+        assertThat(client.findTerminalId("영월")).isEqualTo("NAEK272");
+        assertThat(client.findTerminalId("부여")).isEqualTo("NAEK372");
+        assertThat(client.findTerminalId("태백")).isEqualTo("NAEK274");
+        assertThat(client.findTerminalId("정선")).isEqualTo("NAEK222");
+        assertThat(client.findTerminalId("영천")).isEqualTo("NAEK845");
+        assertThat(client.findTerminalId("영덕")).isEqualTo("NAEK843");
+        assertThat(client.findTerminalId("홍성")).isEqualTo("NAEK389");
+        assertThat(client.findTerminalId("울진")).isEqualTo("NAEK853");
+        assertThat(client.findTerminalId("봉화")).isEqualTo("NAEK858");
+        assertThat(client.findTerminalId("서산")).isEqualTo("NAEK393");
+        assertThat(client.findTerminalId("당진")).isEqualTo("NAEK312");
+        assertThat(client.findTerminalId("논산")).isEqualTo("NAEK370");
+    }
 }

@@ -92,8 +92,8 @@ class ConversationParseServiceMultiTerminalTest {
         assertThat(r1.clarificationPrompt()).startsWith("부산 어느 터미널로");
         apply(session, r1);
 
-        // 대전 터미널("유성")을 부산 되묻기에 답해버린 경우
-        ConversationParseResponse r2 = service.parse(new ConversationParseRequest("유성", "s1"), session);
+        // 대전 터미널("둔산")을 부산 되묻기에 답해버린 경우
+        ConversationParseResponse r2 = service.parse(new ConversationParseRequest("둔산", "s1"), session);
         assertThat(r2.departure()).isEqualTo("부산"); // 안 바뀜
         assertThat(r2.arrival()).isEqualTo("대전");   // 안 바뀜
         assertThat(r2.clarificationPrompt()).doesNotContain("죄송해요");
@@ -119,7 +119,7 @@ class ConversationParseServiceMultiTerminalTest {
     @Test
     void once_the_currently_asked_direction_is_resolved_a_matching_city_answer_moves_to_the_other_direction() {
         // 부산↔대전이 둘 다 애매할 때, 먼저 부산을 정확히 답하고 나면(노포동), 그 다음 턴에는
-        // 대전 터미널("유성")로 정확히 답했을 때 이번엔 진짜로 도착지에 반영되어야 한다 — 앞서 고친
+        // 대전 터미널("둔산")로 정확히 답했을 때 이번엔 진짜로 도착지에 반영되어야 한다 — 앞서 고친
         // "지금 묻는 쪽만 반영" 로직이 두 번째 턴까지 막아버리는 과잉 수정은 아닌지 확인.
         ConversationSession session = newSession("부산", "대전");
         ConversationParseResponse r1 = service.parse(new ConversationParseRequest("노포동", "s1"), session);
@@ -128,9 +128,9 @@ class ConversationParseServiceMultiTerminalTest {
         assertThat(r1.clarificationPrompt()).startsWith("대전 어느 터미널로");
         apply(session, r1);
 
-        ConversationParseResponse r2 = service.parse(new ConversationParseRequest("유성", "s1"), session);
+        ConversationParseResponse r2 = service.parse(new ConversationParseRequest("둔산", "s1"), session);
         assertThat(r2.departure()).isEqualTo("부산종합");
-        assertThat(r2.arrival()).isEqualTo("유성고속");
+        assertThat(r2.arrival()).isEqualTo("대전청사");
     }
 
     @Test
