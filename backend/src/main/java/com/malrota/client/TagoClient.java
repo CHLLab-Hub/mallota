@@ -187,12 +187,23 @@ public class TagoClient {
             }
         }
 
+        // 포함 일치는 여러 터미널에 동시에 걸릴 수 있다 — 예를 들어 "서울"은 일부러 별칭으로 등록해
+        // 두지 않았는데도(세부 터미널을 되묻기 위해서) "서울경부"/"서울고속"/"동서울" 전부에 부분
+        // 일치해 버린다. 실제로 보고된 사고: 되묻는 질문("서울 어느 터미널로?")에 다시 "서울"이라고
+        // 답하면, 서로 다른 터미널(예: 서울경부 vs 동서울) 중 하나가 임의로 골라져 조용히 확정돼
+        // 버렸다. 서로 다른 터미널로 갈리면 매칭 없음(null)으로 처리해 세부 터미널을 다시 묻게
+        // 한다 — 실제로 같은 터미널의 별칭끼리만 겹치는 경우(모호하지 않음)는 그대로 허용한다.
+        String uniqueMatch = null;
         for (Map.Entry<String, String> entry : TERMINAL_MAP.entrySet()) {
             if (clean.contains(entry.getKey()) || entry.getKey().contains(clean)) {
-                return entry.getValue();
+                if (uniqueMatch == null) {
+                    uniqueMatch = entry.getValue();
+                } else if (!uniqueMatch.equals(entry.getValue())) {
+                    return null;
+                }
             }
         }
-        return null;
+        return uniqueMatch;
     }
 
     /** 텍스트에서 정식 터미널명을 찾아 반환 (매칭 없으면 null — findTerminalId와 달리 기본값으로 대체하지 않음) */

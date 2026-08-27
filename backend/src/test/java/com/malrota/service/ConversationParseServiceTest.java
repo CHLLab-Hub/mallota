@@ -9,6 +9,7 @@ import com.malrota.dto.response.ConversationParseResponse;
 import com.malrota.service.nlu.ConversationRuleExtractor;
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -52,6 +53,170 @@ class ConversationParseServiceTest {
         assertThat(r.clarificationPrompt()).contains("서울경부").contains("포항").contains("직행");
         // 노선이 없다는 걸 안 이상, 날짜를 묻는 등 다음 단계로 넘어가면 안 된다.
         assertThat(r.clarificationPrompt()).doesNotContain("날짜");
+    }
+
+    @Test
+    void reports_route_not_found_before_asking_which_terminal_of_an_ambiguous_city() {
+        // 실제로 보고된 사고: "서울"처럼 세부 터미널이 여러 개인 도시는 "서울경부/센트럴시티/동서울
+        // 중 어디로?"를 먼저 물어본 뒤에야(한 턴 낭비) 노선 존재를 확인했다. 그 도시 전체에 노선이
+        // 없으면, 세부 터미널을 되묻지 말고 바로 "노선을 찾지 못했다"고 알려야 한다.
+        TagoClient noRouteTagoClient = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of();
+            }
+        };
+        ConversationParseService serviceWithNoRoute = new ConversationParseService(
+                null, new ConversationRuleExtractor(), new BusSearchService(noRouteTagoClient));
+
+        ConversationParseResponse r = serviceWithNoRoute.parse(
+                new ConversationParseRequest("서울에서 전주로 가는 버스", "s1"), new ConversationSession("s1"));
+
+        assertThat(r.routeNotFound()).isTrue();
+        // "서울 어느 터미널로 원하시나요?" 되묻기가 아니라 노선 없음 안내가 나가야 한다.
+        assertThat(r.clarificationPrompt()).doesNotContain("어느 터미널");
+    }
+
+    @Test
+    void rechecks_the_route_once_an_ambiguous_city_is_narrowed_to_the_specific_terminal_with_no_service() {
+        // 실제로 보고된 사고: "서울"이라고만 하면 그 도시 터미널 중 하나(예: 센트럴시티)라도 노선이
+        // 있어 통과되고 "서울경부/센트럴시티/동서울 중 어디로?"를 물어봤는데, 정작 사용자가 고른
+        // 구체적인 터미널(서울경부)에는 그 노선이 없었다. 날짜/인원/좌석까지 다 물어본 뒤 최종
+        // 검색에서야 "노선 없음"이 드러나면 안 되고, 구체적인 터미널로 좁혀지는 바로 그 턴에
+        // 다시 확인해서 즉시 알려줘야 한다.
+        TagoClient onlyCentralCityHasRoute = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                if ("센트럴시티".equals(depId) && "전주고속".equals(arrId)) {
+                    return List.of(new BusSchedule("R01", "우등", depId, arrId, date + "0800", date + "1200", 20_000));
+                }
+                return List.of();
+            }
+        };
+        ConversationParseService serviceWithPartialRoute = new ConversationParseService(
+                null, new ConversationRuleExtractor(), new BusSearchService(onlyCentralCityHasRoute));
+
+        ConversationSession session = new ConversationSession("s1");
+
+        // 1턴: "서울"(도시 단위, 아직 애매함)이 알려짐 -> 센트럴시티 경유로 노선이 존재하니 통과되고
+        // 세부 터미널을 되묻는다.
+        ConversationParseResponse turn1 = serviceWithPartialRoute.parse(
+                new ConversationParseRequest("내일 오전 8시 서울에서 전주로 가는 버스", "s1"), session);
+        assertThat(turn1.routeNotFound()).isFalse();
+        assertThat(turn1.clarificationPrompt()).contains("어느 터미널");
+
+        session.mergeConditions(turn1.departure(), turn1.arrival(), turn1.date(), turn1.departureTime(),
+                turn1.timePreference(), turn1.servicePreference(), turn1.busGradePreference(),
+                turn1.passengers(), turn1.seatPreferences(), turn1.accessibilityNeeds(), turn1.clarificationPrompt());
+
+        // 2턴: 사용자가 구체적인 터미널("서울경부")을 답한다 — 그런데 이 터미널에는 노선이 없다.
+        ConversationParseResponse turn2 = serviceWithPartialRoute.parse(
+                new ConversationParseRequest("서울경부요", "s1"), session);
+
+        assertThat(turn2.routeNotFound()).isTrue();
+        // 실제로 보고된 사고: "서울경부"만 노선이 없는 건데 무관한 도착지(전주)까지 통째로 지워버리고
+        // "다시 어디에서 어디로 가시는지"부터 새로 물어봤다. 도착지는 그대로 두고, 출발지는 도시
+        // 단위("서울")로 되돌려 다른 세부 터미널(센트럴시티/동서울)을 다시 고를 수 있게 해야 한다.
+        assertThat(turn2.departure()).isEqualTo("서울");
+        assertThat(turn2.arrival()).isEqualTo("전주고속");
+        assertThat(turn2.clarificationPrompt()).contains("서울경부").contains("전주고속").contains("서울의 다른 터미널");
+    }
+
+    @Test
+    void rechecks_the_route_when_a_correction_swaps_one_concrete_terminal_for_another() {
+        // 실제로 보고된 사고: "동대구 말고 서대구"처럼 이미 확정된 구체적 터미널을 다른 구체적
+        // 터미널로 바꾸는 정정은 "처음 알려짐"도 "애매한 도시→구체적 터미널로 좁혀짐"도 아니라서
+        // (둘 다 이미 concrete였으므로) 재확인이 걸리지 않았다 — 노선이 없는 서대구로 바뀌었는데도
+        // 아무 확인 없이 통과되어 버스 종류를 계속 물어봤다. 값이 실제로 바뀌면 재확인해야 한다.
+        TagoClient onlyDongdaeguHasRoute = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                if ("동대구".equals(depId) && "부산종합".equals(arrId)) {
+                    return List.of(new BusSchedule("R01", "우등", depId, arrId, date + "0700", date + "0815", 11_000));
+                }
+                return List.of();
+            }
+        };
+        ConversationParseService serviceWithPartialRoute = new ConversationParseService(
+                null, new ConversationRuleExtractor(), new BusSearchService(onlyDongdaeguHasRoute));
+
+        ConversationSession session = new ConversationSession("s1");
+        session.mergeConditions("동대구", "부산종합", "2026-08-30", "08:00", "MORNING", "ANY", "ANY",
+                1, session.getSeatPreferences(), session.getAccessibilityNeeds(), null);
+
+        ConversationParseResponse r = serviceWithPartialRoute.parse(
+                new ConversationParseRequest("동대구 말고 서대구", "s1"), session);
+
+        assertThat(r.routeNotFound()).isTrue();
+        // 도착지(부산종합)는 이번 실패와 무관하니 그대로 두고, 출발지는 도시 단위("대구")로 되돌려
+        // 다른 세부 터미널(동대구/대구용계)을 다시 고를 수 있게 해야 한다.
+        assertThat(r.departure()).isEqualTo("대구");
+        assertThat(r.arrival()).isEqualTo("부산종합");
+    }
+
+    @Test
+    void rechecks_the_route_when_a_correction_switches_to_an_entirely_different_city() {
+        // 같은 도시 안에서 세부 터미널만 바뀌는 경우뿐 아니라, "대전청사 말고 포항으로"처럼 아예
+        // 다른 도시로 통째로 바뀌는 정정도 재확인이 걸려야 한다. "포항고속"은 터미널이 하나뿐인
+        // 도시라, 되돌려도 같은 값이므로 도시가 아니라 완전히 비워서 새로 입력받아야 한다.
+        TagoClient noRouteToPohang = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of(); // 포항고속-부산종합 사이엔 노선이 없다고 가정
+            }
+        };
+        ConversationParseService serviceWithNoRoute = new ConversationParseService(
+                null, new ConversationRuleExtractor(), new BusSearchService(noRouteToPohang));
+
+        ConversationSession session = new ConversationSession("s1");
+        session.mergeConditions("대전청사", "부산종합", "2026-08-30", "08:00", "MORNING", "ANY", "ANY",
+                1, session.getSeatPreferences(), session.getAccessibilityNeeds(), null);
+
+        ConversationParseResponse r = serviceWithNoRoute.parse(
+                new ConversationParseRequest("대전청사 말고 포항으로", "s1"), session);
+
+        assertThat(r.routeNotFound()).isTrue();
+        // 포항은 터미널이 하나뿐이라 되돌려봐야 소용없으므로 비워서 새로 물어보고, 무관한 도착지는 유지한다.
+        assertThat(r.departure()).isNull();
+        assertThat(r.arrival()).isEqualTo("부산종합");
+    }
+
+    @Test
+    void rejects_a_date_beyond_tagos_actual_publishing_window_with_a_specific_message() {
+        // 실제로 보고된 사고: TAGO 실시간 조회 API는 오늘부터 3일치(오늘/내일/모레) 시간표만
+        // 주고 그 이후 날짜는 노선이 매일 운행돼도 무조건 0건을 반환한다. "다음 주 화요일"처럼
+        // 그 범위 밖 날짜를 물으면, 노선이 멀쩡히 있는데도 "노선을 찾지 못했다"고 잘못 안내됐다.
+        // 날짜 자체를 범위 안으로 제한하고, 벗어나면 정직하게 아직 조회할 수 없다고 안내해야 한다.
+        ConversationSession session = new ConversationSession("s1");
+        session.mergeConditions("서울경부", "포항고속", null, null, "ANY", "ANY", "ANY",
+                1, session.getSeatPreferences(), session.getAccessibilityNeeds(), null);
+
+        ConversationParseResponse r = service.parse(
+                new ConversationParseRequest("다음 주 화요일에 갈게요", "s1"), session);
+
+        assertThat(r.date()).isNull();
+        assertThat(r.clarificationPrompt()).contains("아직 시간표를 조회할 수 없어요").contains("3일 이내");
+        assertThat(r.routeNotFound()).isFalse();
+    }
+
+    @Test
+    void does_not_recheck_an_already_established_date_against_the_real_time_clock_on_later_turns() {
+        // 실제 시간이 흘러 세션에 이미 들어있는(예: 이전 턴에 정상 확정된) 날짜가 나중에 범위를
+        // 벗어나게 되더라도, 이번 턴에 사용자가 그 날짜를 다시 말한 게 아니라면 아무 말 없이
+        // 갑자기 거절되면 안 된다 — 검증은 "이번 턴에 새로 말한 날짜"에만 적용해야 한다.
+        ConversationSession session = new ConversationSession("s1");
+        session.mergeConditions("서울경부", "포항고속", LocalDate.now().plusDays(30).toString(), null,
+                "ANY", "ANY", "ANY", 1, session.getSeatPreferences(), session.getAccessibilityNeeds(), null);
+
+        ConversationParseResponse r = service.parse(
+                new ConversationParseRequest("한 명이요", "s1"), session);
+
+        assertThat(r.date()).isEqualTo(LocalDate.now().plusDays(30).toString());
+        assertThat(r.clarificationPrompt() == null || !r.clarificationPrompt().contains("아직 시간표를 조회할 수 없어요")).isTrue();
     }
 
     @Test
@@ -425,8 +590,11 @@ class ConversationParseServiceTest {
     void a_vague_time_of_day_bucket_alone_is_not_enough_to_proceed() {
         // 실제 피드백: "오전"/"오후"만 받고 넘어가면 실제 버스 시각이 중구난방으로 흩어진다.
         // 정확한 시각(또는 첫차/막차)을 받을 때까지 계속 시간을 되물어야 한다.
+        // 세부 터미널까지 이미 확정된(더 이상 애매하지 않은) 출발/도착을 써서, 이 테스트의 관심사인
+        // "모호한 시간대" 로직이 터미널 되묻기 우선순위 변경(이제 시간보다 먼저 확인됨)의 영향을
+        // 받지 않게 한다.
         ConversationSession session = new ConversationSession("s1");
-        session.mergeConditions("서울", "대전", "2026-08-25", null, "MORNING", "ANY", "ANY",
+        session.mergeConditions("서울경부", "포항고속", "2026-08-25", null, "MORNING", "ANY", "ANY",
                 1, session.getSeatPreferences(), session.getAccessibilityNeeds(), null);
 
         ConversationParseResponse r = service.parse(new ConversationParseRequest("네", "s1"), session);

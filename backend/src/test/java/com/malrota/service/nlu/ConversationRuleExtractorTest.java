@@ -37,6 +37,62 @@ class ConversationRuleExtractorTest {
         assertThat(result.departure()).isEqualTo("서울");
         assertThat(result.arrival()).isEqualTo("대전");
     }
+
+    @Test
+    void does_not_mistake_traveling_alone_for_an_unrecognized_departure_place() {
+        // 실제로 보고된 사고: "혼자서 서울 갈려고"에서 "혼자서"의 "혼자"가 "-서" 문형(출발지 표현)에
+        // 우연히 걸려서 미지원 지역("혼자")으로 잘못 안내됐다. "혼자"는 인원수 표현일 뿐 지명이
+        // 아니므로 출발지 후보로 잡히면 안 되고, 도착지("서울")는 정상적으로 인식돼야 한다.
+        var result = extractor.extract("혼자서 서울 갈려고", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.unrecognizedDeparture()).isNull();
+        assertThat(result.departure()).isNull();
+        assertThat(result.arrival()).isEqualTo("서울");
+        assertThat(result.passengers()).isEqualTo(1);
+    }
+
+    @Test
+    void recognizes_arrival_even_when_glued_directly_to_galryeogo_with_no_space() {
+        // 실제로 보고된 사고: "혼자 서울갈려고"처럼 지명과 "갈려고" 사이에 공백이 없어도(띄어쓰기
+        // 없이 붙여 말해도) 도착지를 인식해야 한다.
+        var result = extractor.extract("혼자 서울갈려고", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.unrecognizedDeparture()).isNull();
+        assertThat(result.arrival()).isEqualTo("서울");
+    }
+
+    @Test
+    void does_not_mistake_location_pronouns_or_connectives_for_an_unrecognized_departure() {
+        // "혼자"와 같은 정규식 구조(2음절 이상 + "-서")로 오탐되는 다른 흔한 단어들: "여기/거기/저기"
+        // (지시대명사)와 "그래서/따라서"(접속사). 실제 지명이 아니므로 출발지 후보로 잡히면 안 된다.
+        assertThat(extractor.extract("여기서 대전 가는 버스 있어?", LocalDateTime.of(2026, 8, 24, 10, 0)).unrecognizedDeparture()).isNull();
+        assertThat(extractor.extract("거기서 출발할게요", LocalDateTime.of(2026, 8, 24, 10, 0)).unrecognizedDeparture()).isNull();
+        assertThat(extractor.extract("저기서 타면 돼요", LocalDateTime.of(2026, 8, 24, 10, 0)).unrecognizedDeparture()).isNull();
+        assertThat(extractor.extract("그래서 서울 갈게요", LocalDateTime.of(2026, 8, 24, 10, 0)).unrecognizedDeparture()).isNull();
+        assertThat(extractor.extract("따라서 대전으로 갑니다", LocalDateTime.of(2026, 8, 24, 10, 0)).unrecognizedDeparture()).isNull();
+    }
+
+    @Test
+    void does_not_mistake_the_subject_particle_ga_for_the_go_verb_ending() {
+        // 실제로 보고된 사고: "친구가 다리를 다쳤어"에서 "친구가"의 "가"가 주격 조사일 뿐인데,
+        // 어미 없는 맨 "가"도 "가다"(go) 동사로 오인해서 "친구"가 도착지 후보로 잡혔다.
+        // "명사+가"(주격 조사)는 극히 흔한 문형이라 이 오탐의 파급력이 크다.
+        var result = extractor.extract("친구가 다리를 다쳤어", base);
+
+        assertThat(result.arrival()).isNull();
+        assertThat(result.unrecognizedArrival()).isNull();
+    }
+
+    @Test
+    void does_not_mistake_directional_verbs_for_an_unrecognized_arrival() {
+        // GENERIC_ARR_PATTERN의 "-가다" 어미 매칭이 "돌아가다/내려가다/올라가다/넘어가다/지나가다/
+        // 다녀가다" 같은 흔한 동사의 어간을 지명으로 오인하면 안 된다.
+        assertThat(extractor.extract("다시 돌아가고 싶어요", LocalDateTime.of(2026, 8, 24, 10, 0)).unrecognizedArrival()).isNull();
+        assertThat(extractor.extract("내려가고 싶어요", LocalDateTime.of(2026, 8, 24, 10, 0)).unrecognizedArrival()).isNull();
+        assertThat(extractor.extract("올라가고 싶어요", LocalDateTime.of(2026, 8, 24, 10, 0)).unrecognizedArrival()).isNull();
+        assertThat(extractor.extract("넘어가고 싶어요", LocalDateTime.of(2026, 8, 24, 10, 0)).unrecognizedArrival()).isNull();
+        assertThat(extractor.extract("지나가고 싶어요", LocalDateTime.of(2026, 8, 24, 10, 0)).unrecognizedArrival()).isNull();
+    }
     private final LocalDateTime base = LocalDateTime.of(2026, 8, 24, 10, 0);
 
     @Test
@@ -80,6 +136,45 @@ class ConversationRuleExtractorTest {
         assertThat(timeResult.departureTime()).hasToString("13:00");
         assertThat(seatResult.seatPreferenceMentioned()).isTrue();
         assertThat(seatResult.seatPreferences()).containsExactly("AISLE");
+    }
+
+    @Test
+    void mentioning_traveling_alone_does_not_count_as_answering_the_seat_preference_question() {
+        // 실제로 보고된 사고: "혼자서 서울 갈려고"라는 인원수 발화만으로 좌석/배려 선호 질문
+        // 자체를 "이미 물어봤다"고 세션에 영구 확정해버려서, 이후 "멀미 심해요" 같은 진짜 배려
+        // 사항을 말할 기회(질문)가 다시는 오지 않는 사고로 이어졌다. "혼자"는 SINGLE 좌석
+        // 선호로는 반영하되, 좌석/배려 질문에 답했다는 뜻은 아니어야 한다.
+        var result = extractor.extract("혼자서 서울 갈려고", base);
+
+        assertThat(result.seatPreferenceMentioned()).isFalse();
+        assertThat(result.seatPreferences()).containsExactly("SINGLE");
+    }
+
+    @Test
+    void infers_two_passengers_when_traveling_with_a_friend() {
+        // 실제로 보고된 사고: "친구랑 대전에서 부산으로 갈려고"라고 말해도 인원이 기본값 1에서
+        // 바뀌지 않았다. "친구"는 가족은 아니지만 "혼자"가 아니라는 뜻이므로 2명으로 추론하고,
+        // 이 발화 자체로 인원을 이미 언급한 것으로 처리해야 한다.
+        var result = extractor.extract("친구랑 대전에서 부산으로 갈려고", base);
+
+        assertThat(result.passengers()).isEqualTo(2);
+        assertThat(result.passengerMentioned()).isTrue();
+    }
+
+    @Test
+    void recognizes_wa_gwa_particle_as_a_companion_expression_too() {
+        // "랑" 말고 "와/과"(표준적인 "함께" 조사)로 말해도 동행으로 인정해야 한다.
+        assertThat(extractor.extract("친구와 부산 가는 버스", base).passengers()).isEqualTo(2);
+        assertThat(extractor.extract("동생과 대전 가는 버스", base).passengers()).isEqualTo(2);
+    }
+
+    @Test
+    void does_not_treat_a_bare_wa_gwa_syllable_unattached_to_a_companion_noun_as_traveling_together() {
+        // "출발과 도착"처럼 "과"가 동행 명사와 무관하게 그냥 접속조사로 쓰인 경우까지 동행으로
+        // 오인하면 안 된다 — 조사가 동행 명사 바로 뒤에 붙어 있을 때만 인정해야 한다.
+        var result = extractor.extract("출발과 도착 시간을 알려줘", base);
+
+        assertThat(result.passengers()).isEqualTo(0);
     }
 
     @Test

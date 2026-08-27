@@ -28,6 +28,14 @@ public class ConversationParseService {
     private final ObjectMapper objectMapper = new ObjectMapper()
             .configure(DeserializationFeature.FAIL_ON_UNKNOWN_PROPERTIES, false);
 
+    /**
+     * TAGO 실시간 조회 API(GetStrtpntAlocFndExpbusInfo)가 실제로 시간표를 제공하는 최대 기간(오늘
+     * 포함, 일 단위). 실제로 확인해 보니 오늘부터 이 기간을 넘어서는 날짜는 노선이 매일 운행돼도
+     * 무조건 0건을 반환한다 — "노선이 없다"와 "아직 그 날짜 시간표를 조회할 수 없다"를 구분하기
+     * 위한 값이다.
+     */
+    private static final int MAX_BOOKABLE_DAYS_AHEAD = 2;
+
     public ConversationParseService(WatsonxClient watsonxClient, ConversationRuleExtractor ruleExtractor,
                                      BusSearchService busSearchService) {
         this.watsonxClient = watsonxClient;
@@ -169,28 +177,84 @@ public class ConversationParseService {
             }
         }
 
-        // [노선 존재 확인] 우리는 직행 노선만 다룬다. 출발/도착이 이번 턴에 막 둘 다 구체적인
-        // 터미널로 확정됐다면, 날짜/인원/좌석까지 다 물어본 뒤에야 "노선이 없다"고 알리면 사용자
-        // 시간만 낭비하게 된다 — 그래서 날짜를 묻기 전, 이 시점에 바로 직행편이 있는지 확인한다.
-        // 이미 예전 턴부터 확정돼 있던 경우(매 턴 반복 조회 방지)는 건너뛰고, "이번 턴에 막
-        // 완성됐을 때"만 한 번 확인한다.
+        // [노선 존재 확인] 우리는 직행 노선만 다룬다. 출발/도착이 이번 턴에 막 둘 다 알려졌다면,
+        // 세부 터미널 되묻기(예: "서울 어느 터미널로")나 날짜/인원/좌석까지 다 물어본 뒤에야
+        // "노선이 없다"고 알리면 사용자 시간만 낭비하게 된다 — 그래서 세부 터미널 확정을 기다리지
+        // 않고, 도시 단위로만 알려져도(예: "서울") 이 시점에 바로 직행편이 있는지 확인한다.
+        // (BusSearchService.hasAnyScheduleBetween이 도시의 모든 터미널을 확인하므로 세부 터미널이
+        // 안 정해졌어도 정확하게 판단할 수 있다.)
+        //
+        // 재확인 시점은 "출발 또는 도착 값이 이번 턴에 실제로 바뀌었는지"로 판단한다 — 처음 알려진
+        // 경우("서울"), 세부 터미널로 좁혀진 경우("서울"→"서울경부"), "말고" 정정으로 다른 값으로
+        // 바뀐 경우("동대구"→"서대구") 전부 값 자체가 달라지므로 이 조건 하나로 충분하다. 실제로
+        // 보고된 사고: 정정("동대구 말고 서대구")은 "처음 알려짐"도 "애매한 도시→구체적 터미널"도
+        // 아니라서(둘 다 이미 concrete였으므로) 재확인이 아예 안 걸렸다. 값이 그대로면(날짜/인원/
+        // 좌석만 답하는 turn 등) 다시 조회하지 않아 매 턴 반복 조회를 피한다.
         String sessionDepartureBefore = sessionValue(session, ConversationSession::getDeparture);
         String sessionArrivalBefore = sessionValue(session, ConversationSession::getArrival);
-        boolean wasRoutePairAlreadyConcrete = isConcreteTerminal(sessionDepartureBefore) && isConcreteTerminal(sessionArrivalBefore);
-        boolean isRoutePairConcreteNow = isConcreteTerminal(departure) && isConcreteTerminal(arrival);
-        if (isRoutePairConcreteNow && !wasRoutePairAlreadyConcrete) {
+        boolean departureChangedThisTurn = !Objects.equals(departure, sessionDepartureBefore);
+        boolean arrivalChangedThisTurn = !Objects.equals(arrival, sessionArrivalBefore);
+        boolean isRoutePairKnownNow = !isBlank(departure) && !isBlank(arrival);
+        if (isRoutePairKnownNow && (departureChangedThisTurn || arrivalChangedThisTurn)) {
             String referenceDate = LocalDate.now().plusDays(2).toString();
             BusSearchRequest routeCheckRequest = new BusSearchRequest(departure, arrival, referenceDate);
             if (!busSearchService.hasAnyScheduleBetween(routeCheckRequest)) {
-                String noRouteMessage = String.format(
-                        "%s에서 %s까지 가는 직행 버스 노선을 찾지 못했어요. 다시 어디에서 어디로 가시는지 말씀해 주세요.",
-                        departure, arrival);
-                return new ConversationParseResponse(intent, departure, arrival, null, null, "ANY", "ANY", "ANY",
+                // 실제로 보고된 사고: "전주"는 이미 알고 있고 "서울" 어느 터미널이냐는 질문에
+                // "서울경부"라고 답했는데 그 터미널만 노선이 없으면, 무관한 도착지(전주)까지 통째로
+                // 지워버리고 "다시 어디에서 어디로 가시는지"부터 새로 물어봤다 — 이미 확인된 정보를
+                // 잃어버리는 나쁜 경험이다. 이번 턴에 실제로 바뀐 쪽만 되돌리고, 바뀌지 않은(이번
+                // 실패와 무관한) 쪽은 그대로 둔다.
+                String keptDeparture = departureChangedThisTurn ? reconcileAfterRouteFailure(departure) : departure;
+                String keptArrival = arrivalChangedThisTurn ? reconcileAfterRouteFailure(arrival) : arrival;
+                // mergeConditions는 null을 "이번 턴에 언급 없음 = 기존 값 유지"로 해석하므로, 여기서
+                // "적극적으로 비운다"는 뜻으로 쓴 null이 그대로 두면 실패한 옛 값이 세션에 남는다.
+                // 컨트롤러가 뒤이어 mergeConditions를 호출하기 전에 직접 지워서 다음 턴에 새로
+                // 물어보게 한다.
+                if (session != null) {
+                    if (keptDeparture == null) session.setDeparture(null);
+                    if (keptArrival == null) session.setArrival(null);
+                }
+
+                String noRouteMessage;
+                boolean departureChanged = !Objects.equals(keptDeparture, departure);
+                boolean arrivalChanged = !Objects.equals(keptArrival, arrival);
+                if (departureChanged && !arrivalChanged) {
+                    String askAgain = keptDeparture != null
+                            ? String.format("%s의 다른 터미널로 다시 말씀해 주세요.", keptDeparture)
+                            : "다른 출발지를 말씀해 주세요.";
+                    noRouteMessage = String.format("%s에는 %s까지 가는 직행 버스 노선이 없어요. %s", departure, arrival, askAgain);
+                } else if (arrivalChanged && !departureChanged) {
+                    String askAgain = keptArrival != null
+                            ? String.format("%s의 다른 터미널로 다시 말씀해 주세요.", keptArrival)
+                            : "다른 도착지를 말씀해 주세요.";
+                    noRouteMessage = String.format("%s에서 %s로 가는 직행 버스 노선이 없어요. %s", departure, arrival, askAgain);
+                } else {
+                    noRouteMessage = String.format(
+                            "%s에서 %s까지 가는 직행 버스 노선을 찾지 못했어요. 다시 어디에서 어디로 가시는지 말씀해 주세요.",
+                            departure, arrival);
+                }
+                return new ConversationParseResponse(intent, keptDeparture, keptArrival, null, null, "ANY", "ANY", "ANY",
                         1, false, List.of(), false, List.of(), List.of(), noRouteMessage, false, false, true);
             }
         }
 
         String date = firstNonBlank(rules.date() == null ? null : rules.date().toString(), sessionValue(session, ConversationSession::getDate), value(llm, ConversationParseResponse::date));
+
+        // [예약 가능 날짜 범위 확인] 실제로 확인해 보니 TAGO 실시간 조회 API는 오늘부터 딱
+        // MAX_BOOKABLE_DAYS_AHEAD일치(오늘 포함) 시간표만 제공하고, 그 이후 날짜는 노선이 실제로
+        // 매일 운행돼도 무조건 0건을 반환한다 — "다음 주 화요일"처럼 그 범위 밖 날짜를 물으면
+        // 노선이 멀쩡히 있는데도 "노선을 찾지 못했다"고 잘못 안내하게 된다(실제로 보고된 사고).
+        // 그래서 날짜 자체를 이 범위 안으로 제한하고, 벗어나면 정직하게 아직 조회할 수 없다고
+        // 안내한 뒤 date를 비워서 다른 날짜를 다시 물어보게 한다.
+        //
+        // 검증은 "이번 턴에 사용자가 실제로 새로 말한 날짜"(rules.date())에만 적용한다 — 세션에
+        // 이미 들어있는 옛 날짜까지 매 턴 실시간 시계로 재검사하면, 시간이 흘러 그 날짜가 범위를
+        // 벗어나는 순간 아무 말도 안 했는데 갑자기 거절당하는 사고가 난다.
+        LocalDate outOfRangeDate = null;
+        if (rules.date() != null && rules.date().isAfter(LocalDate.now().plusDays(MAX_BOOKABLE_DAYS_AHEAD))) {
+            outOfRangeDate = rules.date();
+            date = null;
+        }
 
         // 정확한 시각과 관련된 두 가지 배타 규칙을 모두 적용한다:
         // 1) 오전/오후 없는 "12시"/"8시"처럼 모호한 시각(ambiguousMeridiem)은 추측해서 확정하지 않는다.
@@ -243,7 +307,7 @@ public class ConversationParseService {
         List<String> missing = missingRequired(departure, arrival, date, departureTime, servicePreference);
         String prompt = clarificationPrompt(missing, departure, arrival, passengers, passengerMentioned,
                 seatPreferenceMentioned, timePreference, rules.ambiguousMeridiem(),
-                rules.unrecognizedDeparture(), rules.unrecognizedArrival());
+                rules.unrecognizedDeparture(), rules.unrecognizedArrival(), outOfRangeDate);
 
         // 단독 터미널 답변("센트럴시티" 등)이 들어왔지만 지금 되묻고 있는 도시(예: 대전)와 다른
         // 도시(예: 서울) 터미널이라 어디에도 반영되지 못한 경우, "잘 못 알아들었어요"라는 애매한
@@ -318,15 +382,24 @@ public class ConversationParseService {
         return city.equals(terminalOrCity) || city.equals(TagoClient.cityOf(terminalOrCity));
     }
 
-    /** 아직 세부 터미널이 안 정해진 복수 터미널 도시명(예: "서울")이 아니라, 구체적인 터미널인지. */
-    private boolean isConcreteTerminal(String value) {
-        return !isBlank(value) && !TagoClient.isMultiTerminalCity(value);
+    /**
+     * 노선 확인 실패 후, 이번 턴에 바뀐 값을 어떻게 되돌릴지 판단한다. 여전히 애매한 도시(예:
+     * "서울")인 채로 실패했다면 그 도시의 모든 터미널을 이미 다 확인한 것이므로 살릴 정보가 없어
+     * 비운다(null). 구체적인 터미널(예: "서대구", "서울경부")인데 그 터미널이 속한 도시에 다른
+     * 터미널이 더 있다면(다른 세부 터미널엔 노선이 있을 수 있다) 도시 단위로 되돌려 다시 고를
+     * 여지를 남긴다. 도시에 터미널이 그 하나뿐이면 되돌려도 같은 값으로 돌아올 뿐이므로 비워서
+     * 아예 다른 지역을 새로 입력받는다.
+     */
+    private String reconcileAfterRouteFailure(String value) {
+        if (TagoClient.isMultiTerminalCity(value)) return null;
+        String city = TagoClient.cityOf(value);
+        return (city != null && TagoClient.isMultiTerminalCity(city)) ? city : null;
     }
 
     private boolean hasPassengerMention(String text) {
         if (text == null || text.isBlank()) return false;
         return Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|식구|분(?!\\s*(?:뒤|후)))").matcher(text).find()
-                || List.of("혼자", "둘이", "셋이", "넷이", "다섯이", "부부", "데리고", "모시고", "고치", "같이").stream().anyMatch(text::contains);
+                || List.of("혼자", "둘이", "셋이", "넷이", "다섯이", "부부", "데리고", "모시고", "고치", "같이", "친구", "일행").stream().anyMatch(text::contains);
     }
 
     private boolean isNoSeatPreferenceResponse(String text) {
@@ -375,51 +448,61 @@ public class ConversationParseService {
                                        int passengers, boolean passengerMentioned,
                                        boolean seatPreferenceMentioned, String timePreference,
                                        boolean ambiguousMeridiem, String unrecognizedDeparture,
-                                       String unrecognizedArrival) {
-        // 필수 이동 정보(출발/도착/날짜/시간) 누락 시 질문
-        if (!missing.isEmpty()) {
-            if (missing.contains("departure") && missing.contains("arrival")) {
-                return "어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.";
+                                       String unrecognizedArrival, LocalDate outOfRangeDate) {
+        // 출발/도착 지역 누락 시 질문 (최우선)
+        if (missing.contains("departure") && missing.contains("arrival")) {
+            return "어디에서 출발해서 어디로 가시나요? 출발지와 도착지를 말씀해 주세요.";
+        }
+        if (missing.contains("departure")) {
+            // 등록되지 않은 지명(예: "완도")을 출발지로 말했다면, "출발지를 말씀해 주세요"만
+            // 반복하는 대신 그 지역을 아직 지원하지 않는다고 정직하게 알려준다.
+            if (unrecognizedDeparture != null) {
+                return String.format("죄송해요, '%s'는 아직 지원하지 않는 지역이에요. 다른 출발지를 말씀해 주세요.", unrecognizedDeparture);
             }
-            if (missing.contains("departure")) {
-                // 등록되지 않은 지명(예: "완도")을 출발지로 말했다면, "출발지를 말씀해 주세요"만
-                // 반복하는 대신 그 지역을 아직 지원하지 않는다고 정직하게 알려준다.
-                if (unrecognizedDeparture != null) {
-                    return String.format("죄송해요, '%s'는 아직 지원하지 않는 지역이에요. 다른 출발지를 말씀해 주세요.", unrecognizedDeparture);
-                }
-                return (arrival != null && !arrival.isBlank() ? arrival + "행 " : "") + "버스를 탈 출발 터미널을 말씀해 주세요.";
+            return (arrival != null && !arrival.isBlank() ? arrival + "행 " : "") + "버스를 탈 출발 터미널을 말씀해 주세요.";
+        }
+        if (missing.contains("arrival")) {
+            if (unrecognizedArrival != null) {
+                return String.format("죄송해요, '%s'는 아직 지원하지 않는 지역이에요. 다른 도착지를 말씀해 주세요.", unrecognizedArrival);
             }
-            if (missing.contains("arrival")) {
-                if (unrecognizedArrival != null) {
-                    return String.format("죄송해요, '%s'는 아직 지원하지 않는 지역이에요. 다른 도착지를 말씀해 주세요.", unrecognizedArrival);
-                }
-                return (departure != null && !departure.isBlank() ? departure + "에서 " : "") + "어디로 가시나요?";
-            }
-            if (missing.contains("date") && missing.contains("departureTime")) {
-                return "언제 출발하시나요? '내일 아침', '이번 주말 오후'처럼 날짜와 시간대를 편하게 말씀해 주세요.";
-            }
-            if (missing.contains("date")) {
-                return "출발하시는 날짜를 말씀해 주세요. '오늘', '내일', '이번 주 토요일'처럼 말씀하셔도 됩니다.";
-            }
-            if (missing.contains("departureTime")) {
-                // 오전/오후 없이 "12시"처럼만 말해 자정인지 정오인지 알 수 없는 경우를 최우선으로 짚어준다.
-                if (ambiguousMeridiem) {
-                    return "입력하신 시간이 오전인지 오후인지 확인이 필요해요. '오전 8시', '오후 3시'처럼 오전 또는 오후를 붙여 말씀해 주세요.";
-                }
-                // 이미 "오전"/"오후" 같은 시간대는 말씀하셨다면, 그걸 무시하고 처음부터 다시 묻지 않고
-                // 그 시간대 안에서 정확히 몇 시인지만 좁혀서 묻는다.
-                String timeOfDayKorean = timeOfDayKorean(timePreference);
-                if (timeOfDayKorean != null) {
-                    return String.format("%s 중 정확히 몇 시쯤이 좋으실까요? '%s 9시'처럼 편하게 말씀해 주세요.", timeOfDayKorean, timeOfDayKorean);
-                }
-                return "몇 시쯤 출발하는 버스를 원하시나요? '오전 9시', '오후 3시', '첫차', '막차'처럼 말씀해 주세요.";
-            }
+            return (departure != null && !departure.isBlank() ? departure + "에서 " : "") + "어디로 가시나요?";
         }
 
-        // [전국 복수 터미널 세부 질문] 세부 터미널이 명시되지 않고 큰 지역명만 있는 경우 구체적 안내!
+        // [전국 복수 터미널 세부 질문] 출발/도착 지역이 정해지는 즉시(날짜/시간을 묻기 전에) 세부
+        // 터미널부터 확정한다 — 노선 존재 확인(normalize()에서 이미 도시 단위로 먼저 확인됨)도 세부
+        // 터미널이 정해져야 정확해지므로, 이동 정보(어디서 어디로 + 어느 터미널)를 시간/인원/좌석보다
+        // 먼저 매듭짓는 게 사용자 의도에 맞는다는 실제 피드백을 반영했다.
         String terminalDisambiguation = checkMultiTerminalCity(departure, arrival);
         if (terminalDisambiguation != null) {
             return terminalDisambiguation;
+        }
+
+        // 날짜/시간 누락 시 질문
+        if (missing.contains("date")) {
+            // TAGO 실시간 조회 API가 아직 그 날짜 시간표를 제공하지 않는 경우(실제로 보고된 사고:
+            // "다음 주 화요일"처럼 며칠 뒤를 물으면 노선이 멀쩡히 있어도 매번 0건이 반환됨) — 날짜가
+            // "안 말했다"가 아니라 "그 날짜는 아직 조회가 안 된다"는 걸 정직하게 알려준다.
+            if (outOfRangeDate != null) {
+                return String.format("죄송해요, %s는 아직 시간표를 조회할 수 없어요. 오늘부터 %d일 이내의 날짜로 다시 말씀해 주세요.",
+                        koreanDate(outOfRangeDate), MAX_BOOKABLE_DAYS_AHEAD + 1);
+            }
+            if (missing.contains("departureTime")) {
+                return "언제 출발하시나요? '내일 아침', '이번 주말 오후'처럼 날짜와 시간대를 편하게 말씀해 주세요.";
+            }
+            return "출발하시는 날짜를 말씀해 주세요. '오늘', '내일', '이번 주 토요일'처럼 말씀하셔도 됩니다.";
+        }
+        if (missing.contains("departureTime")) {
+            // 오전/오후 없이 "12시"처럼만 말해 자정인지 정오인지 알 수 없는 경우를 최우선으로 짚어준다.
+            if (ambiguousMeridiem) {
+                return "입력하신 시간이 오전인지 오후인지 확인이 필요해요. '오전 8시', '오후 3시'처럼 오전 또는 오후를 붙여 말씀해 주세요.";
+            }
+            // 이미 "오전"/"오후" 같은 시간대는 말씀하셨다면, 그걸 무시하고 처음부터 다시 묻지 않고
+            // 그 시간대 안에서 정확히 몇 시인지만 좁혀서 묻는다.
+            String timeOfDayKorean = timeOfDayKorean(timePreference);
+            if (timeOfDayKorean != null) {
+                return String.format("%s 중 정확히 몇 시쯤이 좋으실까요? '%s 9시'처럼 편하게 말씀해 주세요.", timeOfDayKorean, timeOfDayKorean);
+            }
+            return "몇 시쯤 출발하는 버스를 원하시나요? '오전 9시', '오후 3시', '첫차', '막차'처럼 말씀해 주세요.";
         }
 
         // 인원수 미언급 시 질문 (표 몇 장)
@@ -440,6 +523,11 @@ public class ConversationParseService {
         }
 
         return null;
+    }
+
+    /** 되묻는 문구에 쓸 "N월 N일" 형식의 날짜 표현. */
+    private String koreanDate(LocalDate date) {
+        return date.getMonthValue() + "월 " + date.getDayOfMonth() + "일";
     }
 
     /** 받침 유무에 따라 "은"/"는" 조사를 고른다 (한글 음절이 아니면 "는"으로 무난하게 처리) */

@@ -6,7 +6,7 @@ import { VoicePanel, speak } from './VoicePanel'
 import type { ConversationSessionResult } from './types'
 
 const SEAT_LABELS: Record<string, string> = {
-  WINDOW: '창가', AISLE: '통로', FRONT: '앞쪽', MIDDLE: '중간', BACK: '뒤쪽', ADJACENT: '연석',
+  WINDOW: '창가', AISLE: '통로', FRONT: '앞쪽', MIDDLE: '중간', BACK: '뒤쪽', ADJACENT: '연석', SINGLE: '단독석',
 }
 const GRADE_LABELS: Record<string, string> = { EXCELLENT: '우등', PREMIUM: '프리미엄', GENERAL: '일반' }
 const ACCESS_LABELS: Record<string, string> = {
@@ -89,10 +89,12 @@ export function ConversationPanel() {
       const session: ConversationSessionResult = await parseConversation(sendText, sessionId)
 
       if (session.routeNotFound) {
-        // 출발지-도착지 사이에 직행 노선 자체가 없는 경우 — 세션에 남겨두면 같은 노선을 계속
-        // 물어보게 되므로, 세션을 초기화해서 다음 발화부터 출발지/도착지를 새로 물어보게 한다.
+        // 노선 확인에 실패해도 서버(ConversationParseService)가 이번 실패와 무관한 정보(예:
+        // 이미 확정된 도착지)는 세션에 그대로 남겨두고, 문제가 된 쪽만 되돌리거나 비워둔다.
+        // 여기서 세션을 통째로 초기화하면 서버가 살려둔 정보까지 잃어버리게 되므로, 같은
+        // sessionId를 계속 써서 다음 발화가 이어서 반영되게 한다.
         appSay(session.clarificationPrompt ?? '해당 노선을 찾지 못했어요. 다시 어디에서 어디로 가시는지 말씀해 주세요.')
-        setSessionId(null)
+        setSessionId(session.sessionId)
         return
       }
 

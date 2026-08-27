@@ -26,8 +26,20 @@ class TagoClientTest {
     @Test
     @DisplayName("서로 다른 도시명끼리는 모음 혼동 보정을 적용해도 잘못 겹치지 않는다")
     void does_not_collide_different_cities_after_vowel_folding() {
-        // "대구"와 "대전"처럼 애초에 다른 음절 개수/자음 구성이면 모음 보정과 무관하게 여전히 다르다
-        assertThat(TagoClient.resolveCanonicalName("대구")).isNotEqualTo(TagoClient.resolveCanonicalName("대전"));
+        // "동대구"와 "대전복합"처럼 애초에 다른 음절 개수/자음 구성이면 모음 보정과 무관하게 여전히
+        // 다르다. ("대구"/"대전"처럼 세부 터미널이 여러 개인 도시명 그 자체는 일부러 모호하게
+        // 남겨두므로 - 아래 테스트 참고 - 이 테스트는 구체적인 터미널명으로 확인한다.)
+        assertThat(TagoClient.resolveCanonicalName("동대구")).isNotEqualTo(TagoClient.resolveCanonicalName("대전복합"));
+    }
+
+    @Test
+    @DisplayName("세부 터미널이 여러 개인 도시명 그 자체(\"서울\", \"대구\")는 임의로 하나를 골라버리지 않고 매칭 없음으로 처리한다")
+    void does_not_arbitrarily_resolve_an_ambiguous_multi_terminal_city_name() {
+        // 실제로 보고된 사고: "서울 어느 터미널로?"라는 되묻기에 사용자가 다시 "서울"이라고만
+        // 답하면, 포함 일치 폴백이 "서울경부"/"동서울" 중 하나를 임의로 골라 조용히 확정해버렸다.
+        // 서로 다른 터미널에 걸치는 애매한 도시명은 null로 처리해서 다시 되묻게 해야 한다.
+        assertThat(TagoClient.resolveCanonicalName("서울")).isNull();
+        assertThat(TagoClient.resolveCanonicalName("대구")).isNull();
     }
 
     @Test

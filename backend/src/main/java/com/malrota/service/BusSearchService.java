@@ -10,6 +10,7 @@ import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Objects;
 
 @Service
 public class BusSearchService {
@@ -72,9 +73,42 @@ public class BusSearchService {
      * 등급/시간 조건과 무관하게, 이 출발지-도착지 사이에 그날 배차가 하나라도 있는지 확인한다.
      * 우리는 직행 노선만 다루므로, 이게 false면 두 도시 사이에 직행 버스가 아예 없다는 뜻이다
      * (조건에 안 맞는 게 아니라 노선 자체가 없는 경우와 구분하기 위한 용도).
+     *
+     * 출발/도착이 아직 세부 터미널로 확정되지 않은 도시(예: "서울")여도 확인할 수 있다 — 그 도시의
+     * 터미널 중 하나라도 노선이 있으면 존재하는 것으로 본다. rawSchedules()처럼 findTerminalId의
+     * 부정확한 부분일치 폴백에 기대 도시 중 하나를 임의로 골라버리면(예: "서울"→우연히 서울경부만
+     * 확인하고 센트럴시티는 확인 안 함) 실제로는 노선이 있는데 없다고 오판할 수 있어서, 도시 단위
+     * 검사는 그 도시의 등록된 터미널 전부를 명시적으로 순회한다. 세부 터미널을 다 되묻기 전에 먼저
+     * 노선 존재부터 확인해, 노선 자체가 없으면 터미널 되묻기 없이 바로 안내할 수 있게 하기 위해서다.
      */
     public boolean hasAnyScheduleBetween(BusSearchRequest request) {
-        return !rawSchedules(request).isEmpty();
+        if (request == null || !hasText(request.departure()) || !hasText(request.arrival()) || !hasText(request.date())) {
+            return false;
+        }
+        List<String> depIds = resolveTerminalIds(request.departure());
+        List<String> arrIds = resolveTerminalIds(request.arrival());
+        if (depIds.isEmpty() || arrIds.isEmpty()) return false;
+
+        String date = request.date().replace("-", "");
+        for (String depId : depIds) {
+            for (String arrId : arrIds) {
+                if (depId.equals(arrId)) continue;
+                if (!tagoClient.searchBuses(depId, arrId, date).isEmpty()) return true;
+            }
+        }
+        return false;
+    }
+
+    /** 도시명이면 그 도시의 모든 터미널 ID를, 이미 구체적인 터미널이면 그 터미널 ID 하나만 반환한다. */
+    private List<String> resolveTerminalIds(String terminalOrCity) {
+        if (TagoClient.isMultiTerminalCity(terminalOrCity)) {
+            return TagoClient.terminalsInCity(terminalOrCity).stream()
+                    .map(tagoClient::findTerminalId)
+                    .filter(Objects::nonNull)
+                    .toList();
+        }
+        String id = tagoClient.findTerminalId(terminalOrCity);
+        return id == null ? List.of() : List.of(id);
     }
 
     /**

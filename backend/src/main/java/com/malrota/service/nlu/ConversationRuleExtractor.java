@@ -33,7 +33,7 @@ public class ConversationRuleExtractor {
     private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(?:출발(?:지)?[:\\s]*)?(" + TERMINALS + ")\\s*(?:에서|서|발)");
     // "으로"/"로" 조사는 받침 유무에 따라 형태가 다르다("천안고속으로", "동대구로") — "로"만 인정하면
     // 받침 있는 터미널명(예: "-고속"으로 끝나는 이름들) 뒤에 "으로"가 붙었을 때 매칭이 실패한다.
-    private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))");
+    private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)|갈(?:려고|려는)?|도착))");
     // "서울에서 대전으로 가요"처럼 한 문장에 출발지와 도착지가 함께 있을 때는 각각 따로 잡는 것보다
     // 이 문장 구조를 우선한다. 두 도시가 같은 값으로 덮이는 사고를 막는다.
     private static final Pattern ROUTE_PATTERN = Pattern.compile(
@@ -54,8 +54,25 @@ public class ConversationRuleExtractor {
     // 통째로 삼켜버린 채로도(=지명이 "서울로") 나머지 패턴("가는")이 그대로 매칭돼 버려서, 등록되지
     // 않은 도시(서울/대구/대전/부산/광주 등 터미널이 여럿이라 별칭에 없는 도시)의 도착지를 "-(으)로
     // 가는" 형태로 말하면 지명에 조사가 섞여 들어가 아예 인식이 실패했다(실사용 보고 사례).
+    //
+    // "가" 뒤의 어미(요/는/자/고/려고/는데)는 반드시 하나가 있어야 한다(선택 사항이면 안 됨) — 실제로
+    // 보고된 사고: "친구가 다리를 다쳤어"에서 "친구가"의 "가"가 주격 조사일 뿐인데 어미 없는 맨 "가"도
+    // 매칭돼 버려서 "친구"가 도착지로 오인됐다. "명사+가"(주격 조사)는 극히 흔한 문형이라, "가다"
+    // 동사 어미로 확실히 해석되는 경우(요/는/자/고/려고/는데가 뒤따르는 경우)만 인정한다.
     private static final Pattern GENERIC_ARR_PATTERN = Pattern.compile(
-            "([가-힣]{2,}?)\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)?|갈|도착))(?![가-힣])");
+            "([가-힣]{2,}?)\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)|갈(?:려고|려는)?|도착))(?![가-힣])");
+
+    // "혼자서"처럼 출발 문형("-서")과 우연히 겹치는 흔한 비지명 단어. GENERIC_DEP_PATTERN이 이런
+    // 단어를 출발지 후보로 잡아버리면 "혼자서 서울 갈려고"에서 "혼자"가, "여기서 대전 가는 버스
+    // 있어?"에서 "여기"가, "그래서 서울 갈게요"에서 "그래"가 미지원 지역으로 오인된다(실제 보고 +
+    // 같은 정규식 구조로 재현되는 사례들).
+    private static final Set<String> NON_TERMINAL_DEPARTURE_WORDS = Set.of(
+            "혼자", "같이", "함께", "저희", "우리", "여기", "거기", "저기", "그래", "따라");
+
+    // "돌아가고"/"내려가고"처럼 도착 문형("-가다" 계열 동사)과 우연히 겹치는 흔한 비지명 단어.
+    // GENERIC_ARR_PATTERN이 이런 동사 어간을 도착지 후보로 잡아버리는 걸 막는다.
+    private static final Set<String> NON_TERMINAL_ARRIVAL_WORDS = Set.of(
+            "돌아", "내려", "올라", "넘어", "지나", "다녀");
 
     private static final Pattern MONTH_DAY_PATTERN = Pattern.compile("(\\d{1,2})\\s*월\\s*(\\d{1,2})\\s*일");
     private static final Pattern NEXT_MONTH_DAY_PATTERN = Pattern.compile("다음\\s*달\\s*(\\d{1,2})\\s*일");
@@ -122,7 +139,7 @@ public class ConversationRuleExtractor {
             } else {
                 arrival = find(ARRIVAL_PATTERN, input);
                 if (arrival == null) {
-                    String genericArrival = find(GENERIC_ARR_PATTERN, input);
+                    String genericArrival = findGenericArrival(input);
                     if (genericArrival != null) {
                         if (isPlausibleTerminal(genericArrival)) arrival = genericArrival;
                         else unrecognizedArrival = genericArrival;
@@ -131,7 +148,7 @@ public class ConversationRuleExtractor {
 
                 departure = find(DEPARTURE_PATTERN, input);
                 if (departure == null) {
-                    String genericDeparture = find(GENERIC_DEP_PATTERN, input);
+                    String genericDeparture = findGenericDeparture(input);
                     if (genericDeparture != null) {
                         if (isPlausibleTerminal(genericDeparture)) departure = genericDeparture;
                         else unrecognizedDeparture = genericDeparture;
@@ -394,7 +411,7 @@ public class ConversationRuleExtractor {
     private boolean hasPassengerExpression(String text) {
         if (text == null || text.isBlank()) return false;
         return PASSENGER_PATTERN.matcher(text).find()
-                || List.of("혼자", "둘이", "셋이", "넷이", "다섯이", "부부", "데리고", "모시고", "고치", "같이").stream().anyMatch(text::contains);
+                || List.of("혼자", "둘이", "셋이", "넷이", "다섯이", "부부", "데리고", "모시고", "고치", "같이", "친구", "일행").stream().anyMatch(text::contains);
     }
 
     private int extractPassengers(String text) {
@@ -432,8 +449,21 @@ public class ConversationRuleExtractor {
         if (List.of("두 명", "둘이서", "둘이", "두 장", "두 식구", "부부").stream().anyMatch(text::contains)) return 2;
         if (List.of("한 명", "혼자서", "혼자", "한 장").stream().anyMatch(text::contains)) return 1;
 
-        boolean hasFamily = List.of("할머니", "할아버지", "할망", "하르방", "손주", "손자", "손녀", "손지", "영감", "바깥양반", "안사람", "집사람", "딸래미", "아들래미").stream().anyMatch(text::contains);
-        boolean hasTogether = List.of("데리고", "데꼬", "모시고", "이랑", "하고", "고치", "같이", "탈 건데", "갈 건데").stream().anyMatch(text::contains);
+        // "친구랑"처럼 가족이 아닌 동행(친구/일행 등)도 "혼자"가 아니라는 뜻이므로 인원 추론에
+        // 포함해야 한다 — 실제로 보고된 사고: "친구랑 대전에서 부산으로 갈려고"라고 말해도 인원이
+        // 기본값 1에서 바뀌지 않았다.
+        List<String> companionNouns = List.of("할머니", "할아버지", "할망", "하르방", "손주", "손자", "손녀", "손지",
+                "영감", "바깥양반", "안사람", "집사람", "딸래미", "아들래미", "친구", "일행", "동생", "언니", "오빠", "형");
+        boolean hasFamily = companionNouns.stream().anyMatch(text::contains);
+        // "-와/과/랑/이랑/하고"("함께"란 뜻의 조사)는 동행 명사 바로 뒤에 붙어 있을 때만 인정한다.
+        // "랑"/"와"/"과" 한 글자만 아무 데나 있으면(예: "출발과 도착", "사랑") 오탐이 나기 쉽다.
+        // STT가 명사와 조사 사이에 공백을 잘못 끼워 넣을 수 있어 공백을 제거하고 비교한다.
+        String compact = text.replaceAll("\\s+", "");
+        List<String> companionParticles = List.of("랑", "이랑", "와", "과", "하고");
+        boolean hasCompanionParticle = companionNouns.stream()
+                .anyMatch(noun -> companionParticles.stream().anyMatch(particle -> compact.contains(noun + particle)));
+        boolean hasTogether = hasCompanionParticle
+                || List.of("데리고", "데꼬", "모시고", "고치", "같이", "탈 건데", "갈 건데").stream().anyMatch(text::contains);
         if (hasFamily && hasTogether) return 2;
 
         return 0;
@@ -556,6 +586,30 @@ public class ConversationRuleExtractor {
         return matcher.find() ? matcher.group(1) : null;
     }
 
+    /**
+     * GENERIC_DEP_PATTERN 매치 중 NON_TERMINAL_DEPARTURE_WORDS에 해당하는 흔한 비지명 단어("혼자"
+     * 등)는 건너뛰고, 그 뒤에 실제 지명 후보가 더 있으면 그것을 대신 반환한다. 없으면 null을 반환해
+     * 출발지가 "미지원 지역"이 아니라 그냥 "아직 안 말한 것"으로 정상 처리되게 한다.
+     */
+    private String findGenericDeparture(String text) {
+        Matcher matcher = GENERIC_DEP_PATTERN.matcher(text);
+        while (matcher.find()) {
+            String candidate = matcher.group(1);
+            if (!NON_TERMINAL_DEPARTURE_WORDS.contains(candidate)) return candidate;
+        }
+        return null;
+    }
+
+    /** findGenericDeparture와 대칭 — GENERIC_ARR_PATTERN 매치 중 흔한 비지명 동사 어간은 건너뛴다. */
+    private String findGenericArrival(String text) {
+        Matcher matcher = GENERIC_ARR_PATTERN.matcher(text);
+        while (matcher.find()) {
+            String candidate = matcher.group(1);
+            if (!NON_TERMINAL_ARRIVAL_WORDS.contains(candidate)) return candidate;
+        }
+        return null;
+    }
+
     private LocalDate safeDate(int year, int month, int day) {
         try { return LocalDate.of(year, month, day); } catch (Exception e) { return null; }
     }
@@ -569,7 +623,11 @@ public class ConversationRuleExtractor {
     }
 
     private boolean hasSeatPreferenceExpression(String text) {
-        return List.of("창가", "통로", "앞쪽", "앞자리", "앞좌석", "중간", "뒤쪽", "뒷쪽", "뒷자리", "뒷좌석", "혼자",
+        // "혼자"는 여기 넣지 않는다 — 인원수를 밝히는 표현("혼자서 서울 갈려고")일 뿐인데, 여기 있으면
+        // 좌석/배려 선호 질문 자체를 이미 답한 것으로 세션에 영구 확정(seatPreferenceConfirmed)돼
+        // 버려서 "멀미 심해요" 같은 실제 배려사항을 물어볼 기회가 다시는 오지 않는 사고가 났다.
+        // extractSeatPreferences()가 "혼자"에서 SINGLE 좌석 선호를 뽑아내는 것과는 별개다.
+        return List.of("창가", "통로", "앞쪽", "앞자리", "앞좌석", "중간", "뒤쪽", "뒷쪽", "뒷자리", "뒷좌석",
                 "햇빛", "볕", "그늘", "양지").stream().anyMatch(text::contains);
     }
 

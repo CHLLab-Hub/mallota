@@ -52,6 +52,48 @@ class BusSearchServiceTest {
     }
 
     @Test
+    void finds_a_route_through_any_terminal_of_an_undisambiguated_multi_terminal_city() {
+        // 실제로 보고된 사고: "서울"처럼 세부 터미널이 여러 개인 도시는, 사용자가 "서울경부/센트럴
+        // 시티/동서울 중 어디로?"에 답해야만 노선 존재를 확인했다 — 그 사이 한 턴이 낭비됐다.
+        // 세부 터미널이 안 정해졌어도, 그 도시 터미널 중 하나(여기선 센트럴시티)라도 노선이 있으면
+        // 바로 "노선 있음"으로 판단해야 한다.
+        TagoClient client = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                // 서울경부/동서울 -> 전주는 노선이 없고, 센트럴시티 -> 전주만 노선이 있다.
+                if ("센트럴시티".equals(depId) && "전주".equals(arrId)) {
+                    return List.of(schedule("R01", "202608280800", 20_000));
+                }
+                return List.of();
+            }
+        };
+
+        BusSearchService service = new BusSearchService(client);
+        BusSearchRequest request = new BusSearchRequest("서울", "전주", "2026-08-28");
+
+        assertThat(service.hasAnyScheduleBetween(request)).isTrue();
+    }
+
+    @Test
+    void reports_no_route_when_none_of_a_multi_terminal_citys_terminals_has_service() {
+        // 위 테스트의 대칭 — 세부 터미널이 안 정해졌어도, 그 도시의 모든 터미널을 확인한 뒤에야
+        // "노선 없음"으로 판단해야 한다(임의로 하나만 확인하고 없다고 단정하면 안 된다).
+        TagoClient client = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of();
+            }
+        };
+
+        BusSearchService service = new BusSearchService(client);
+        BusSearchRequest request = new BusSearchRequest("서울", "전주", "2026-08-28");
+
+        assertThat(service.hasAnyScheduleBetween(request)).isFalse();
+    }
+
+    @Test
     void premium_grade_filter_excludes_the_pricier_late_night_premium_variant() {
         // 실제로 보고된 사고: 앱에서 보이는 "프리미엄" 요금이 실제(TAGO)와 다른 것 같다는 문의.
         // 원인은 TAGO가 "심야프리미엄"(52,600원)을 "프리미엄"(43,900원)과는 별도의, 더 비싼 등급으로
