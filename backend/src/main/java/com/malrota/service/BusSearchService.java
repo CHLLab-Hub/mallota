@@ -17,7 +17,7 @@ public class BusSearchService {
     /** 요청 시각보다 이른 버스는 최대 2시간 전, 늦은 버스는 최대 30분 후까지만 추천한다. */
     private static final int MAX_EARLY_MINUTES = 120;
     private static final int MAX_LATE_MINUTES = 30;
-    /** 추천 카드(최저가/다른 시간)는 먼저 30분 이내에서 후보를 찾고, 없으면 1시간까지 범위를 넓힌다. */
+    /** 추천 카드(최저가/추천 시간)는 먼저 30분 이내에서 후보를 찾고, 없으면 1시간까지 범위를 넓힌다. */
     private static final int OTHER_TIME_PRIMARY_MINUTES = 30;
     private static final int OTHER_TIME_FALLBACK_MINUTES = 60;
     /** 이르게 출발하는 버스에 주는 소폭의 페널티(분) — 같은 거리면 늦게 출발하는 쪽을 더 선호한다. */
@@ -107,12 +107,21 @@ public class BusSearchService {
             List<BusSchedule> sorted = gradeFiltered.stream().sorted(scheduleComparator(effective)).toList();
             if (sorted.isEmpty()) return result;
             BusSchedule cheapest = sorted.stream().min(Comparator.comparingInt(BusSchedule::charge)).orElse(null);
-            if (cheapest != null) result.add(new BusRecommendation(cheapest, "가장 저렴한 버스입니다.", "최저가"));
+            BusSchedule other = null;
             for (BusSchedule s : sorted) {
                 if (cheapest == null || !isSameBus(s, cheapest)) {
-                    result.add(new BusRecommendation(s, "비슷한 시간대의 다른 버스입니다.", "다른 시간"));
+                    other = s;
                     break;
                 }
+            }
+            if (cheapest != null) {
+                boolean tiedPrice = other != null && other.charge() == cheapest.charge();
+                result.add(new BusRecommendation(cheapest,
+                        tiedPrice ? "요청하신 조건과 가장 가까운 버스입니다." : "가장 저렴한 버스입니다.",
+                        tiedPrice ? "가까운 시간" : "최저가"));
+            }
+            if (other != null) {
+                result.add(new BusRecommendation(other, "비슷한 시간대의 추천 버스입니다.", "추천 시간"));
             }
             return result;
         }
@@ -127,11 +136,8 @@ public class BusSearchService {
         if (cheapestPool.isEmpty()) return result;
 
         BusSchedule cheapest = cheapestPool.stream().min(Comparator.comparingInt(BusSchedule::charge)).orElse(null);
-        if (cheapest != null) {
-            result.add(new BusRecommendation(cheapest, "가장 저렴한 버스입니다.", "최저가"));
-        }
 
-        // "다른 시간": 최저가와 다른, 요청 시각에 가장 가까운 버스. 30분 이내에서 먼저 찾고,
+        // "추천 시간": 최저가와 다른, 요청 시각에 가장 가까운 버스. 30분 이내에서 먼저 찾고,
         // (최저가가 그 안의 유일한 후보였던 경우 등) 없으면 1시간까지 범위를 넓힌다. 이르게
         // 출발하는 쪽보다 늦게 출발하는 쪽을 살짝 더 선호한다(같은 거리면 조금 늦게 타는 걸 더
         // 편하게 여기는 경우가 많다).
@@ -145,8 +151,19 @@ public class BusSearchService {
                     .min(Comparator.comparingInt(s -> weightedDistance(departureTime(s), requestedTime)))
                     .orElse(null);
         }
+
+        if (cheapest != null) {
+            // 두 카드 요금이 같으면 "최저가"라는 이름이 거짓 차별점을 암시한다 — 실제로는 요청
+            // 시각(30분 이내)에 맞춰 고른 것뿐이므로, 그 경우엔 "가까운 시간"으로 정직하게 표시한다.
+            boolean tiedPrice = other != null && other.charge() == cheapest.charge();
+            if (tiedPrice) {
+                result.add(new BusRecommendation(cheapest, "요청하신 시간과 가장 가까운 버스입니다.", "가까운 시간"));
+            } else {
+                result.add(new BusRecommendation(cheapest, "가장 저렴한 버스입니다.", "최저가"));
+            }
+        }
         if (other != null) {
-            result.add(new BusRecommendation(other, "비슷한 시간대의 다른 버스입니다.", "다른 시간"));
+            result.add(new BusRecommendation(other, "비슷한 시간대의 추천 버스입니다.", "추천 시간"));
         }
         return result;
     }

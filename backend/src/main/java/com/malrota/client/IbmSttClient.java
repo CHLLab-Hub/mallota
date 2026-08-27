@@ -20,7 +20,7 @@ import java.util.Map;
  */
 @Slf4j
 @Component
-public class IbmSttClient {
+public class IbmSttClient implements SttClient {
 
     private final IbmSpeechProperties props;
     // 타임아웃을 안 걸어두면 IBM 서버가 응답이 느릴 때 요청이 무한정 걸려서, 프론트 화면이
@@ -42,6 +42,7 @@ public class IbmSttClient {
     /**
      * 오디오 바이트 → 한국어 텍스트 변환
      */
+    @Override
     @SuppressWarnings("unchecked")
     public String transcribe(byte[] audio, String contentType) {
         if (!props.isSttEnabled()) {

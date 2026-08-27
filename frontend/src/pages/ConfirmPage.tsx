@@ -61,10 +61,8 @@ export function ConfirmPage() {
         totalFare,
       })
       addBooking(booking)
-      addBooking(booking)
       setPaidBooking(booking)
       appSay('결제가 완료되었습니다. 안전한 여행 되세요. 확인을 누르시면 처음 화면으로 돌아갑니다.')
-    } catch {
     } catch {
       appSay('예매 정보를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.')
       // 실패했을 때만 결제 버튼을 다시 열어준다 — 성공 후에는 팝업이 뜬 채로 잠가 두어 중복 예매를 막는다
@@ -79,6 +77,7 @@ export function ConfirmPage() {
     setSeat(null)
     setSelectedSeatNo(null)
     setSessionId(null)
+    setRecommendations([])
     resetMessages()
     setScreen('home')
   }

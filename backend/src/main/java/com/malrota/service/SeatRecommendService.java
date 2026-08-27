@@ -70,10 +70,10 @@ public class SeatRecommendService {
         if (prefs.contains("FRONT")) return "FRONT";
         if (prefs.contains("MIDDLE")) return "MIDDLE";
         if (prefs.contains("BACK")) return "BACK";
-        if (access.contains("WALKING_DIFFICULTY") || access.contains("ELDERLY_CARE") || access.contains("VISUAL_IMPAIRMENT")) {
+        if (access.contains("WALKING_DIFFICULTY") || access.contains("ELDERLY_CARE") || access.contains("VISUAL_IMPAIRMENT")
+                || access.contains("MOTION_SICKNESS")) {
             return "FRONT";
         }
-        if (access.contains("MOTION_SICKNESS")) return "MIDDLE";
         return "ANY";
     }
 
@@ -561,7 +561,9 @@ public class SeatRecommendService {
 
         if (!explicitPositionGiven && access.contains("WALKING_DIFFICULTY") && seat.position().equals("FRONT")) score += 15;
         if (access.contains("WALKING_DIFFICULTY") && seat.side().equals("AISLE")) score += 8;
-        if (!explicitPositionGiven && access.contains("MOTION_SICKNESS") && seat.position().equals("MIDDLE")) score += 12;
+        // 멀미는 앞쪽(흔들림이 덜함)보다 창가(시야 고정으로 어지럼이 덜함)를 더 우선한다.
+        if (!explicitPositionGiven && access.contains("MOTION_SICKNESS") && seat.position().equals("FRONT")) score += 10;
+        if (!prefs.contains("AISLE") && access.contains("MOTION_SICKNESS") && seat.side().equals("WINDOW")) score += 16;
         if (!explicitPositionGiven && access.contains("ELDERLY_CARE") && seat.position().equals("FRONT")) score += 10;
         // 임산부는 앞쪽 위치보다 화장실 접근·승하차가 쉬운 통로 쪽 좌석을 준다 (프리미엄 등급은
         // 아래 1열 창가석 규칙이 우선한다).
@@ -597,8 +599,11 @@ public class SeatRecommendService {
         if (access.contains("WALKING_DIFFICULTY") && seat.side().equals("AISLE")) {
             reasons.add("이동이 편한 통로 쪽 좌석입니다.");
         }
-        if (!explicitPositionGiven && access.contains("MOTION_SICKNESS") && seat.position().equals("MIDDLE")) {
-            reasons.add("멀미가 덜하도록 흔들림이 적은 중간 좌석입니다.");
+        if (!explicitPositionGiven && access.contains("MOTION_SICKNESS") && seat.position().equals("FRONT")) {
+            reasons.add("멀미가 덜하도록 흔들림이 적은 앞쪽 좌석입니다.");
+        }
+        if (!prefs.contains("AISLE") && access.contains("MOTION_SICKNESS") && seat.side().equals("WINDOW")) {
+            reasons.add("멀미가 덜하도록 시야를 고정할 수 있는 창가 좌석입니다.");
         }
         if (!explicitPositionGiven && access.contains("ELDERLY_CARE") && seat.position().equals("FRONT")) {
             reasons.add("승하차가 편한 앞쪽 좌석입니다.");

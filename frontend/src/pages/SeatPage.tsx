@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useRef, useState } from 'react'
 import { SeatMap, findSeatGroup, formatSeats } from '../features/conversation/SeatMap'
 import { useAppState } from '../features/conversation/AppState'
 import { VoicePanel, speak } from '../features/conversation/VoicePanel'
@@ -21,6 +21,16 @@ export function SeatPage() {
     addMessage('app', t)
     speak(t)
   }
+
+  // 화면에 들어오면 이 좌석을 고른 이유(예: "통로를 선호하신다고 해서...")를 한 번만 읽어준다.
+  const announcedReason = useRef(false)
+  useEffect(() => {
+    if (!announcedReason.current && seat?.reasons && seat.reasons.length > 0) {
+      announcedReason.current = true
+      appSay(seat.reasons.join(' '))
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [seat])
 
   // 백엔드가 함께 추천한 좌석 묶음(2/3/4인)이다. 직접 선택을 시작하면 이 묶음 대신 한 자리씩 고른다.
   const hasGroup = Boolean(seat?.adjacentPair && seat.alternatives.length > 0)
@@ -134,11 +144,16 @@ export function SeatPage() {
         </button>
       </header>
 
-      <h1 className="home-title" style={{ fontSize: '1.4rem' }}>좌석 선택</h1>
+      <h1 className="home-title" style={{ fontSize: '1.4rem', paddingBottom: '8px' }}>좌석 선택</h1>
 
       <div className="home-body">
         {!selecting ? (
-          <button type="button" className="send-button" onClick={startSelecting} style={{ marginBottom: '12px' }}>
+          <button
+            type="button"
+            className="send-button"
+            onClick={startSelecting}
+            style={{ width: '70%', display: 'block', margin: '0 auto 8px' }}
+          >
             다른 좌석 선택하기
           </button>
         ) : (

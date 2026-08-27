@@ -131,7 +131,10 @@ export function ConversationPanel() {
       }
     } catch (error) {
       if (error instanceof ApiError) {
-        appSay(error.errors[0]?.message ?? '오류가 발생했습니다.')
+        // ApiError.message에는 타임아웃/네트워크 오류처럼 상황에 맞는 안내가 이미 들어있는데,
+        // errors[0]이 항상 비어있는 경우(예: TIMEOUT) errors[0]?.message만 보면 그 안내를
+        // 놓치고 뭉뚱그린 "오류가 발생했습니다."만 들려주게 된다.
+        appSay(error.errors[0]?.message ?? error.message ?? '오류가 발생했습니다.')
       } else {
         appSay('처리 중 문제가 발생했습니다. 서버 상태를 확인해 주세요.')
       }

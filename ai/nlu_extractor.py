@@ -202,7 +202,7 @@ class WatsonxNluExtractor:
         3. 멀미 및 어지럼 표현:
         - "속 울렁울렁행", "메스꺼우니까네", "차 타면 토해", "옴팡지게 멀미"
             * accessibilityNeeds에 "MOTION_SICKNESS" 추가
-            * seatPreferences에 "MIDDLE" (중간) 우선 배정
+            * seatPreferences에 "FRONT", "WINDOW" 우선 배정 (앞쪽보다 창가에 더 가중치)
         4. 사투리 시간 및 속도 표현:
         - "시방", "싸게싸게", "젤 빠른 거", "일찍이" -> servicePreference: "FIRST"
         - "점심 묵고", "낮참에" -> timePreference: "AFTERNOON"

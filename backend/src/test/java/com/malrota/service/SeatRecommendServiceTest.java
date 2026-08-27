@@ -130,8 +130,10 @@ class SeatRecommendServiceTest {
     }
 
     @Test
-    @DisplayName("3. 멀미(MOTION_SICKNESS) 시 흔들림이 적은 중간 4B 좌석 추천")
-    void prioritizes_middle_seat_for_motion_sickness() {
+    @DisplayName("3. 멀미(MOTION_SICKNESS) 시 앞쪽보다 창가를 더 우선해 4B 좌석 추천")
+    void prioritizes_window_seat_for_motion_sickness() {
+        // 1A(앞쪽/통로)와 4B(중간/창가) 중, "창가에 더 가중치"라는 요청에 따라 앞쪽이 아니어도
+        // 창가인 4B가 더 높은 점수를 받아야 한다.
         SeatRecommendService service = serviceWith(List.of(
                 new Seat("1A", 1, 1, "FRONT", "AISLE", true),
                 new Seat("4B", 4, 2, "MIDDLE", "WINDOW", true),
@@ -141,7 +143,7 @@ class SeatRecommendServiceTest {
         var result = service.recommend(new SeatRecommendRequest("우등", List.of(), List.of("MOTION_SICKNESS"), 1));
 
         assertThat(result.bestSeat().seatNo()).isEqualTo("4B");
-        assertThat(result.reasons()).contains("멀미가 덜하도록 흔들림이 적은 중간 좌석입니다.");
+        assertThat(result.reasons()).contains("멀미가 덜하도록 시야를 고정할 수 있는 창가 좌석입니다.");
     }
 
     @Test
@@ -350,9 +352,11 @@ class SeatRecommendServiceTest {
     void includes_tied_pairs_as_same_condition_alternatives() {
         // 5줄을 통째로 매진시켜서, 목표 줄(5줄)과 똑같이 한 줄 떨어진 4줄과 6줄 연석이 정확히 동점이
         // 되게 만든다 — 배정받은 연석 말고 동등하게 좋은 다른 연석이 어디 있는지 보여줘야 한다.
+        // (멀미는 이제 앞쪽/창가를 우선하므로, 중간 줄을 목표로 하는 이 테스트는 명시적 MIDDLE
+        // 선호로 검증한다.)
         SeatRecommendService service = serviceWith(excellentLayout("5A", "5B", "5C"));
 
-        var result = service.recommend(new SeatRecommendRequest("우등", List.of(), List.of("MOTION_SICKNESS"), 2));
+        var result = service.recommend(new SeatRecommendRequest("우등", List.of("MIDDLE"), List.of(), 2));
 
         assertThat(result.bestSeat().seatNo()).isEqualTo("4A");
         assertThat(result.alternatives()).extracting(Seat::seatNo).containsExactly("4B");

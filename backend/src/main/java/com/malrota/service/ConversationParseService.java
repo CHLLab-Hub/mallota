@@ -326,7 +326,7 @@ public class ConversationParseService {
         if (isBlank(arrival)) missing.add("arrival");
         if (isBlank(date)) missing.add("date");
         // "오전"/"오후"만으로는 부족하다 — 시간대만 받으면 실제 버스 시각이 중구난방으로 흩어져서
-        // (추천 시간/최저가/다른 시간 3개뿐인) 추천 결과가 사용자 의도와 동떨어질 수 있다. 정확한
+        // (최저가/추천 시간 2개뿐인) 추천 결과가 사용자 의도와 동떨어질 수 있다. 정확한
         // 시각(departureTime)이나 "첫차"/"막차"(그 자체로 시각이 하나로 정해짐)만 통과시킨다.
         boolean hasServicePreference = "FIRST".equalsIgnoreCase(servicePref) || "LAST".equalsIgnoreCase(servicePref);
         if (isBlank(depTime) && !hasServicePreference) {
@@ -474,7 +474,7 @@ public class ConversationParseService {
            숫자/인원 표현이 전혀 없으면 기존 수집 정보의 passengers 값을 그대로 유지하고, 기존 정보도 없으면 1을 반환하세요.
         4. 신체/좌석 배려:
            - 다리/무릎 통증, 도가니, 시큰거림, 삭신, 계단 힘듦 -> accessibilityNeeds에 "WALKING_DIFFICULTY" & seatPreferences에 "FRONT"
-           - 멀미, 속 울렁거림, 메스꺼움 -> accessibilityNeeds에 "MOTION_SICKNESS" & seatPreferences에 "MIDDLE"
+           - 멀미, 속 울렁거림, 메스꺼움 -> accessibilityNeeds에 "MOTION_SICKNESS" & seatPreferences에 "FRONT", "WINDOW" (창가를 앞쪽보다 우선)
            - 임산부, 임신, 만삭 -> accessibilityNeeds에 "PREGNANCY" & seatPreferences에 "AISLE"
            - 시각장애, 안내견 동반 -> accessibilityNeeds에 "VISUAL_IMPAIRMENT" & seatPreferences에 "FRONT"
         5. 등급 선호: "우등"->EXCELLENT, "프리미엄"/"비싼 버스"/"고급 버스"/"누워서 가는 거"->PREMIUM, "일반/싼 거/싼 놈"->GENERAL, "아무거나"->ANY.
