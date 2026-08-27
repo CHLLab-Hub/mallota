@@ -26,13 +26,17 @@ public class SeatRecommendService {
 
         List<String> access = request.accessibilityNeeds() != null ? request.accessibilityNeeds() : List.of();
         List<String> prefs = request.seatPreferences() != null ? request.seatPreferences() : List.of();
+        // 앞뒤로 붙은 좌석("세로 연석")은 프리미엄처럼 통로 건너편이 매줄 홀로 좌석이라 가로 연석이
+        // 원천적으로 불가능한 등급에서만 "나란히 앉는 것"에 준하는 의미가 있다. 일반/우등 등급에서는
+        // 앞뒤로 떨어진 자리를 "연석"이라 부르면 오해를 줄 수 있어 프리미엄에서만 허용한다.
+        boolean allowVerticalPair = request.busGrade() != null && request.busGrade().contains("프리미엄");
 
         // 2인 이상 예매 시 ➔ 인원수에 맞는 그룹 배치 우선 탐색. 나란히 붙은 자리(가로/세로)가 전혀 없는
-        // 등급(예: 프리미엄의 통로 건너 홀로 좌석)에서도 마지막에는 "따로따로"로라도 반드시 인원수만큼 배정
-        // 좌석 배치가 안 맞는다고 아무것도 못 찾아주는 일이 없도록
+        // 등급(예: 프리미엄의 통로 건너 홀로 좌석)에서도 마지막에는 "따로따로"로라도 반드시 인원수만큼
+        // 배정한다 — 좌석 배치가 안 맞는다고 아무것도 못 찾아주는 일이 없게 한다.
         if (passengers >= 2) {
             SeatRecommendation groupRec = switch (passengers) {
-                case 2 -> recommendPair(seats, access, prefs);
+                case 2 -> recommendPair(seats, access, prefs, allowVerticalPair);
                 case 3 -> {
                     SeatRecommendation triple = recommendTriple(seats, access, prefs);
                     yield triple != null ? triple : recommendSeparatePassengers(seats, access, prefs, 3);
@@ -56,7 +60,10 @@ public class SeatRecommendService {
     // ---- 공통 헬퍼: 선호 구역 판별 ----
 
     /**
-     * 사용자가 좌석 위치를 직접 말했으면(FRONT/MIDDLE/BACK) 최우선
+     * 사용자가 좌석 위치를 직접 말했으면(FRONT/MIDDLE/BACK) 그게 최우선이다. "할머니 모시고" 같은
+     * 말에서 자동으로 추론된 접근성 배려(WALKING_DIFFICULTY/ELDERLY_CARE → 앞쪽 등)는 사용자가
+     * 아무 위치도 안 말했을 때만 기본값으로 쓴다 — 안 그러면 "뒷자리로 주세요"라고 명확히 말해도
+     * 추론된 배려가 그걸 조용히 덮어써 버린다 (뒷좌석 요청했는데 앞좌석이 나오는 사고의 원인).
      */
     private String preferredSection(List<String> access, List<String> prefs) {
         if (prefs.contains("FRONT")) return "FRONT";
@@ -88,13 +95,14 @@ public class SeatRecommendService {
     }
 
     /**
-     * 2인 배치 탐색: 가로(나란히) 연석을 최우선으로, 없으면 세로(앞뒤) 연석, 그마저 없으면
-     * 따로따로라도 가까운 자리 2석을 배정
+     * 2인 배치 탐색: 가로(나란히) 연석을 최우선으로, 프리미엄 등급이면 없을 때 세로(앞뒤) 연석,
+     * 그마저 없으면 따로따로라도 가까운 자리 2석을 배정한다 (예: 프리미엄 등급은 통로 건너편이
+     * 홀로 좌석이라 가로 연석이 원천적으로 불가능한 줄이 있다).
      */
-    private SeatRecommendation recommendPair(List<Seat> seats, List<String> access, List<String> prefs) {
+    private SeatRecommendation recommendPair(List<Seat> seats, List<String> access, List<String> prefs, boolean allowVerticalPair) {
         List<PairDefinition> pairDefs = findAdjacentPairs(seats);
         boolean vertical = false;
-        if (pairDefs.isEmpty()) {
+        if (pairDefs.isEmpty() && allowVerticalPair) {
             pairDefs = findVerticalPairs(seats);
             vertical = true;
         }
@@ -102,7 +110,9 @@ public class SeatRecommendService {
         String preferredSection = preferredSection(access, prefs);
         String preferredSectionKorean = sectionKorean(preferredSection);
 
-        // 선호 구역을 지키는 게 연석 여부보다 중요
+        // 나란히든 앞뒤든, 원하는 구역 안에 연석이 아예 없으면 엉뚱한 다른 구역의 연석보다는 원하는
+        // 구역 "안에서" 따로라도 앉는 걸 우선한다 — 안 그러면 "뒷자리로 주세요"라고 말해도 앞쪽에
+        // 연석이 있다는 이유만으로 앞자리가 나와버린다. 구역을 지키는 게 연석 여부보다 중요하다.
         boolean hasPairInPreferredSection = !"ANY".equals(preferredSection)
                 && pairDefs.stream().anyMatch(p -> preferredSection.equals(p.position));
         if (!"ANY".equals(preferredSection) && !hasPairInPreferredSection) {
@@ -137,7 +147,8 @@ public class SeatRecommendService {
         PairCandidate best = availablePairs.get(0);
         PairDefinition bestDef = best.def;
 
-        // 점수가 동률인 다른 연석도 "같은 조건 좌석"으로 함께 보여 줌
+        // 점수가 동률인 다른 연석도 "같은 조건 좌석"으로 함께 보여준다 — 배정받은 자리 말고
+        // 다른 자리를 원할 때 동등하게 좋은 선택지가 어디 있는지 바로 알 수 있게 한다.
         List<Seat> tiedGroupSeats = new ArrayList<>();
         for (PairCandidate c : availablePairs) {
             if (c != best && c.score() == best.score()) {
@@ -310,8 +321,9 @@ public class SeatRecommendService {
 
     /**
      * 요청한 구역(예: 뒤쪽) 안에 나란히/앞뒤로 붙은 연석이 없을 때, 엉뚱한 다른 구역의 연석보다는
-     * 요청한 구역 "안에서" 따로라도 앉는 걸 우선
-     * 요청한 구역에 인원수만큼 빈자리가 없으면 null을 돌려줘서 호출한 쪽이 다음 단계(다른 구역의 가장 가까운 연석)로 넘어가도록 함
+     * 요청한 구역 "안에서" 따로라도 앉는 걸 우선한다 — "뒷자리로 주세요"라고 했는데 앞쪽에 연석이
+     * 있다는 이유만으로 앞자리가 나와버리는 사고를 막는다. 요청한 구역에 인원수만큼 빈자리가 없으면
+     * null을 돌려줘서 호출한 쪽이 다음 단계(다른 구역의 가장 가까운 연석)로 넘어가게 한다.
      */
     private SeatRecommendation trySeparateWithinSection(List<Seat> seats, List<String> access, List<String> prefs,
                                                           String preferredSection, String preferredSectionKorean,
@@ -344,7 +356,7 @@ public class SeatRecommendService {
 
     /**
      * 나란히든 앞뒤든 붙어있는 자리를 아예 만들 수 없을 때(예: 프리미엄 등급의 통로 건너 홀로 좌석만
-     * 남은 경우)의 마지막 수단: 인원수만큼 "따로따로"라도 각자 가장 좋은 자리를 배정
+     * 남은 경우)의 마지막 수단: 인원수만큼 "따로따로"라도 각자 가장 좋은 자리를 배정한다.
      */
     private SeatRecommendation recommendSeparatePassengers(List<Seat> seats, List<String> access, List<String> prefs, int count) {
         List<ScoredSeat> ranked = rankSingleSeatsScored(seats, access, prefs);
@@ -377,7 +389,7 @@ public class SeatRecommendService {
 
     /**
      * 같은 줄에서 통로를 사이에 두지 않고 붙어 있는 빈 좌석 쌍을 모두 찾는다.
-     * 좌석 배치도가 [A][B] | [C] 이므로 B-C는 통로를 사이에 둔 자리라 연석 취급X
+     * 좌석 배치도가 [A][B] | [C] 이므로 B-C는 통로를 사이에 둔 자리라 연석이 아니다.
      */
     private List<PairDefinition> findAdjacentPairs(List<Seat> seats) {
         List<PairDefinition> pairs = new ArrayList<>();
@@ -529,10 +541,15 @@ public class SeatRecommendService {
     }
 
     /**
-     * - 자동 추론된 접근성 배려(WALKING_DIFFICULTY, ELDERLY_CARE → 앞쪽 선호)는 사용자가 명시적으로 다른 위치를 요청했을 때는 점수에 반영하지 않음
-     * - 통로 쪽 좌석 배려(이동 편의)는 위치와 무관하므로 항상 반영
+     * "다리가 불편해서/할머니 모시고" 같은 말에서 자동 추론된 접근성 배려(WALKING_DIFFICULTY,
+     * ELDERLY_CARE → 앞쪽 선호)는 사용자가 명시적으로 다른 위치를 요청했을 때는 점수에 반영하지
+     * 않는다 — 안 그러면 "뒷좌석으로 주세요"라고 말해도 추론된 배려가 그걸 덮어써서 앞좌석이
+     * 나와 버린다. 통로 쪽 좌석 배려(이동 편의)는 위치와 무관하므로 항상 반영한다.
      *
-     * targetRow 기준 거리 가산점도 항상 반영- 원하는 구역과 가까울수록 유리하게 해서, 매진이면 최소한 "가장 가까운" 자리가 나오게 한다.
+     * targetRow 기준 거리 가산점도 항상 반영한다 — 원하는 구역이 완전히 매진이라 정확히 일치하는
+     * 좌석이 하나도 없을 때, 점수가 전부 0으로 동률이 되어 좌석 생성 순서상 우연히 앞자리가 먼저
+     * 나오는 사고(뒷자리 요청 → 매진 → 조용히 앞자리 배정)를 막는다. 원하는 구역과 가까울수록
+     * 유리하게 해서, 매진이면 최소한 "가장 가까운" 자리가 나오게 한다.
      */
     private int seatScore(Seat seat, List<String> access, List<String> prefs, int targetRow) {
         boolean explicitPositionGiven = prefs.contains("FRONT") || prefs.contains("MIDDLE") || prefs.contains("BACK");

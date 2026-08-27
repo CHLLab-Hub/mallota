@@ -36,7 +36,7 @@ class ConversationControllerIntegrationTest {
 
         mockMvc.perform(post("/api/conversation/parse")
                         .contentType(MediaType.APPLICATION_JSON)
-                        .content("{\"text\":\"내일 오전에 다리가 불편해서 앞쪽 통로로 갈게요\",\"sessionId\":\"" + sessionId + "\"}"))
+                        .content("{\"text\":\"내일 오전 9시에 한 명이고 다리가 불편해서 앞쪽 통로로 갈게요\",\"sessionId\":\"" + sessionId + "\"}"))
                 .andExpect(status().isOk())
                 .andExpect(jsonPath("$.state").value("READY_TO_SEARCH"))
                 .andExpect(jsonPath("$.date").isNotEmpty())

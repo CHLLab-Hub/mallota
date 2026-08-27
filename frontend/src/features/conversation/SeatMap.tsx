@@ -4,13 +4,28 @@ import type { Seat } from './types'
 export const AISLE_AFTER_COLUMN = 2
 
 /** 통로를 사이에 두지 않고 실제로 나란히 붙어 있는 빈 옆자리 찾기 */
-export function findPairPartner(seats: Seat[], seat: Seat): Seat | null {
+function findHorizontalPairPartner(seats: Seat[], seat: Seat): Seat | null {
   const sameRow = seats.filter((s) => s.row === seat.row && s.available)
   const candidates = [
     sameRow.find((s) => s.column === seat.column - 1 && s.column !== AISLE_AFTER_COLUMN),
     sameRow.find((s) => s.column === seat.column + 1 && seat.column !== AISLE_AFTER_COLUMN),
   ].filter((s): s is Seat => Boolean(s))
   return candidates[0] ?? null
+}
+
+/**
+ * 프리미엄 버스의 독립 1인석 열에는 가로 짝이 없으므로,
+ * 같은 구역 안의 바로 앞/뒤 빈 좌석도 두 분 좌석 후보로 허용한다.
+ */
+export function findPairPartner(seats: Seat[], seat: Seat): Seat | null {
+  const horizontal = findHorizontalPairPartner(seats, seat)
+  if (horizontal) return horizontal
+  return seats.find((candidate) =>
+    candidate.available
+    && candidate.column === seat.column
+    && candidate.position === seat.position
+    && Math.abs(candidate.row - seat.row) === 1,
+  ) ?? null
 }
 
 /** 두 좌석을 칸 순서대로 "9A, 9B" 형태로 표기 */
@@ -31,12 +46,12 @@ export function findRowTriple(seats: Seat[], seat: Seat): Seat[] | null {
   const sameRow = seats.filter((s) => s.row === seat.row && s.available)
 
   let pair: Seat[] | null = null
-  const clickedPartner = findPairPartner(seats, seat)
+  const clickedPartner = findHorizontalPairPartner(seats, seat)
   if (clickedPartner) {
     pair = [seat, clickedPartner]
   } else {
     for (const candidate of sameRow) {
-      const partner = findPairPartner(seats, candidate)
+      const partner = findHorizontalPairPartner(seats, candidate)
       if (partner) {
         pair = [candidate, partner]
         break
@@ -60,7 +75,7 @@ export function findRowTriple(seats: Seat[], seat: Seat): Seat[] | null {
 
 /** 4인석: 클릭한 좌석이 속한 연석과 같은 칸으로 앞뒤 줄에 이어진 사각형(2x2) 배치 */
 export function findRectangleQuad(seats: Seat[], seat: Seat): Seat[] | null {
-  const partner = findPairPartner(seats, seat)
+  const partner = findHorizontalPairPartner(seats, seat)
   if (!partner) return null
   const pair = [seat, partner].sort((a, b) => a.column - b.column)
   const cols = pair.map((s) => s.column)

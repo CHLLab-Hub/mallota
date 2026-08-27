@@ -1,13 +1,12 @@
-import { createContext, useContext, useState, type ReactNode } from 'react'
-import type { BusSchedule, SeatRecommendation, BusRecommendation } from './types'
+import { createContext, useContext, useEffect, useState, type ReactNode } from 'react'
+import { fetchBookings, getBookingOwnerId } from '../../api/bookingApi'
+import type { Booking, BusSchedule, SeatRecommendation, BusRecommendation } from './types'
+export type { Booking } from './types'
 // 화면 종류
 export type Screen = 'home' | 'bus' | 'seat' | 'confirm' | 'history' | 'mypage'
 
 // 대화 메시지
 export type ChatMessage = { role: 'app' | 'user'; text: string }
-
-// 예매 내역 항목 (totalCharge는 좌석 1자리 요금이 아니라 인원수까지 반영한 실제 결제 금액)
-export type Booking = { bus: BusSchedule; seatNo: string; passengers: number; totalCharge: number; id: string }
 
 // 공유 상태 타입
 interface AppStateValue {
@@ -47,6 +46,7 @@ interface AppStateValue {
   setPassengers: (n: number) => void
 
   bookings: Booking[]
+  setBookings: (b: Booking[]) => void
   addBooking: (b: Booking) => void
   removeBooking: (id: string) => void
 }
@@ -71,6 +71,20 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   const [accessibilityNeeds, setAccessibilityNeeds] = useState<string[]>([])
   const [passengers, setPassengers] = useState<number>(1)
   const [bookings, setBookings] = useState<Booking[]>([])
+
+  // 예매 내역의 기준은 프런트 메모리가 아니라 PostgreSQL이다.
+  // 앱을 새로 열거나 화면을 이동해도 과거의 임시 상태가 남아 DB 건수와 달라지지 않게 한다.
+  useEffect(() => {
+    let mounted = true
+    fetchBookings(getBookingOwnerId())
+      .then((items) => {
+        if (mounted) setBookings(items)
+      })
+      .catch(() => {
+        // 백엔드가 아직 실행 전이면 기존 화면 흐름은 유지하고, 예매 내역 화면에서 오류를 안내한다.
+      })
+    return () => { mounted = false }
+  }, [])
 
   function addMessage(role: 'app' | 'user', text: string) {
     setMessages((prev) => [...prev, { role, text }])
@@ -101,7 +115,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
         seatPreferences, setSeatPreferences,
         accessibilityNeeds, setAccessibilityNeeds,
         passengers, setPassengers,
-        bookings, addBooking, removeBooking,
+        bookings, setBookings, addBooking, removeBooking,
       }}
     >
       {children}

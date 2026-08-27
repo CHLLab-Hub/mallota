@@ -5,12 +5,29 @@ import { useAppState } from './AppState'
 import logo from '../../assets/logo.png'
 import './ConversationPanel.css'
 
+// 화면이 바뀌거나 다음 안내가 시작되면 이전 음성과 네트워크 요청까지 멈춘다.
+// 모듈 범위로 두어 Home/Bus/Seat/Confirm 페이지가 서로 달라도 하나의 음성만 재생된다.
+let currentAudio: HTMLAudioElement | null = null
+let currentTtsController: AbortController | null = null
+
+export function stopSpeaking() {
+  currentTtsController?.abort()
+  currentTtsController = null
+  if (currentAudio) {
+    currentAudio.pause()
+    currentAudio.currentTime = 0
+    currentAudio = null
+  }
+}
+
 interface VoicePanelProps {
   onUserSpeak: (text: string) => void | Promise<void>
   loading?: boolean
+  /** 좌석 선택처럼 화면 공간이 중요한 단계에서는 마이크만 표시한다. */
+  compact?: boolean
 }
 
-export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
+export function VoicePanel({ onUserSpeak, loading, compact = false }: VoicePanelProps) {
   const { messages } = useAppState()
   const [text, setText] = useState('')
   const [showInput, setShowInput] = useState(false)
@@ -44,7 +61,8 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
       }
     } else {
       setError(null)
-      stopSpeaking() // 겹쳐 들리는 문제 방지
+      // 사용자가 답하기 시작할 때 이전 안내가 마이크 입력에 섞이지 않게 한다.
+      stopSpeaking()
       try {
         await startRecording()
       } catch (e) {
@@ -57,22 +75,25 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
     if (!text.trim()) return
     const t = text
     setText('')
-    setError(null)
+    setError(null) // 이전 음성 인식 실패 메시지가 남아있으면, 직접 입력이 성공해도 화면에 계속 떠 있었다
+    stopSpeaking()
     await onUserSpeak(t)
   }
 
   return (
     <div>
       <div className="chat-container">
-        <div className="chat-messages">
-          {messages.map((m, i) => (
-            <div key={i} className={`chat-row ${m.role}`}>
-              {m.role === 'app' && <img src={logo} alt="" className="chat-avatar" />}
-              <div className={`chat-bubble ${m.role}`}>{m.text}</div>
-            </div>
-          ))}
-          <div ref={bottomRef} />
-        </div>
+        {!compact && (
+          <div className="chat-messages">
+            {messages.map((m, i) => (
+              <div key={i} className={`chat-row ${m.role}`}>
+                {m.role === 'app' && <img src={logo} alt="" className="chat-avatar" />}
+                <div className={`chat-bubble ${m.role}`}>{m.text}</div>
+              </div>
+            ))}
+            <div ref={bottomRef} />
+          </div>
+        )}
 
         {error && <p style={{ color: 'red' }}>{error}</p>}
 
@@ -97,11 +118,13 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
           <div className="mic-label">
             {recording ? '녹음 중... (누르면 완료)' : transcribing ? '인식 중...' : loading ? '처리 중...' : '눌러서 말하기'}
           </div>
-          <button type="button" className="mic-sublabel" onClick={() => setShowInput((v) => !v)}>
-            직접 글씨로 입력하기
-          </button>
+          {!compact && (
+            <button type="button" className="mic-sublabel" onClick={() => setShowInput((v) => !v)}>
+              직접 글씨로 입력하기
+            </button>
+          )}
 
-          {showInput && (
+          {!compact && showInput && (
             <div style={{ width: '100%' }}>
               <textarea
                 className="chat-input"
@@ -125,39 +148,25 @@ export function VoicePanel({ onUserSpeak, loading }: VoicePanelProps) {
   )
 }
 
-// 모듈 스코프 상태: "지금 재생 중인 오디오"와 "가장 최근 요청"을 추적해 TTS끼리 겹치지 않도록
-let currentAudio: HTMLAudioElement | null = null
-let latestRequestId = 0
-
 // 앱이 말하기 (TTS) — 어디서든 쓸 수 있게 export
 export async function speak(t: string) {
   if (!t.trim()) return
-  const requestId = ++latestRequestId
+  stopSpeaking()
+  const controller = new AbortController()
+  currentTtsController = controller
   try {
-    const data = await textToSpeech(t)
-    // textToSpeech가 응답을 기다리는 사이에 더 최신 speak() 호출이 들어왔다면, 이 오래된 응답은 재생하지 않고 버림
-    if (requestId !== latestRequestId) return
-    if (data.audio) {
-      // 아직 재생 중인 이전 TTS가 있으면 먼저 멈추어 다음 텍스트가 나올 때 이전 안내가 겹치지 않게 함
-      if (currentAudio) {
-        currentAudio.pause()
-        currentAudio.currentTime = 0
-      }
+    const data = await textToSpeech(t, controller.signal)
+    // 늦게 끝난 이전 요청은 이미 새 안내가 시작된 상태이므로 재생하지 않는다.
+    if (data.audio && currentTtsController === controller) {
       const audio = new Audio('data:audio/mp3;base64,' + data.audio)
       currentAudio = audio
+      audio.onended = () => {
+        if (currentAudio === audio) currentAudio = null
+        if (currentTtsController === controller) currentTtsController = null
+      }
       await audio.play()
     }
   } catch (e) {
-    // 무시
-  }
-}
-
-// 사용자가 마이크를 눌러 말하기 시작할 때, 아직 재생 중인 안내 음성이 있으면 멈춤
-export function stopSpeaking() {
-  latestRequestId++ // 응답 대기 중이던 이전 speak() 호출이 뒤늦게 재생을 시작하지 못하게 막음
-  if (currentAudio) {
-    currentAudio.pause()
-    currentAudio.currentTime = 0
-    currentAudio = null
+    // 중단(AbortError)과 TTS 실패는 화면에서 별도 안내하지 않는다.
   }
 }

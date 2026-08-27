@@ -36,6 +36,8 @@ export function BusPage() {
   const [loading, setLoading] = useState(false)
   const announced = useRef(false)
 
+  const totalFare = (bus: BusSchedule) => bus.charge * passengers
+
   function appSay(t: string) {
     addMessage('app', t)
     speak(t)
@@ -46,7 +48,7 @@ export function BusPage() {
     if (recommendations.length > 0 && !announced.current) {
       announced.current = true
       const text = recommendations
-        .map((r) => `${r.reason} ${formatTime(r.bus.departureTime)} 출발, ${r.bus.charge.toLocaleString()}원.`)
+        .map((r) => `${r.reason} ${formatTime(r.bus.departureTime)} 출발, ${passengers}인 총 ${totalFare(r.bus).toLocaleString()}원.`)
         .join(' ')
       appSay('추천 버스를 안내해드릴게요. ' + text + ' 어떤 버스로 하시겠어요?')
     }
@@ -64,7 +66,12 @@ export function BusPage() {
         passengers,
       })
       setSeat(seatData)
-      appSay(`${formatTime(bus.departureTime)} 출발 버스를 선택했어요. 추천 좌석은 ${seatData.bestSeat?.seatNo ?? ''}번입니다. 이 좌석으로 결제할까요?`)
+      // 2인 이상 연석 추천은 bestSeat 하나만 읽으면 동행 좌석을 알 수 없다.
+      // adjacentPair일 때 alternatives에는 함께 추천된 나머지 좌석만 들어온다.
+      const recommendedSeats = seatData.adjacentPair && seatData.bestSeat
+        ? [seatData.bestSeat, ...seatData.alternatives].map((seat) => `${seat.seatNo}번`).join(', ')
+        : seatData.bestSeat ? `${seatData.bestSeat.seatNo}번` : ''
+      appSay(`${formatTime(bus.departureTime)} 출발 버스를 선택했어요. ${passengers}인 총 요금은 ${totalFare(bus).toLocaleString()}원이고, 추천 좌석은 ${recommendedSeats}입니다. 이 좌석으로 결제할까요?`)
       setTimeout(() => setScreen('seat'), 3000)
     } catch (e) {
       appSay('좌석 정보를 불러오지 못했습니다.')
@@ -163,7 +170,7 @@ export function BusPage() {
                 {formatTime(rec.bus.departureTime)} 출발 · {formatTime(rec.bus.arrivalTime)} 도착
               </div>
               <div style={{ fontSize: '1rem', color: '#58665f', marginTop: '4px' }}>
-                {rec.bus.grade} · {rec.bus.charge.toLocaleString()}원
+                {rec.bus.grade} · 1인 {rec.bus.charge.toLocaleString()}원 · <b>총 {totalFare(rec.bus).toLocaleString()}원</b>
               </div>
             </button>
           ))

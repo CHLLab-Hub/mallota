@@ -1,4 +1,5 @@
-import { useEffect, useRef } from 'react'
+import { useEffect, useRef, useState } from 'react'
+import { createBooking, getBookingOwnerId } from '../api/bookingApi'
 import { useAppState } from '../features/conversation/AppState'
 import { VoicePanel, speak } from '../features/conversation/VoicePanel'
 import './HomePage.css'
@@ -25,6 +26,7 @@ export function ConfirmPage() {
   } = useAppState()
 
   const announced = useRef(false)
+  const [isPaying, setIsPaying] = useState(false)
 
   function appSay(t: string) {
     addMessage('app', t)
@@ -32,30 +34,43 @@ export function ConfirmPage() {
   }
 
   const seatNo = selectedSeatNo ?? seat?.bestSeat?.seatNo ?? ''
-  // 요금은 예매 인원수만큼 곱해서 산출
-  const totalCharge = (selectedBus?.charge ?? 0) * Math.max(passengers, 1)
+  const totalFare = selectedBus ? selectedBus.charge * passengers : 0
 
   // 화면 뜰 때 승차권 안내
   useEffect(() => {
     if (selectedBus && !announced.current) {
       announced.current = true
-      appSay(`${selectedBus.departure}에서 ${selectedBus.arrival}로 가는 ${formatTime(selectedBus.departureTime)} 출발 버스가 준비되었습니다. 좌석은 ${seatNo}번입니다. 결제 금액은 ${totalCharge.toLocaleString()}원입니다. 결제할까요?`)
+      appSay(`${selectedBus.departure}에서 ${selectedBus.arrival}로 가는 ${formatTime(selectedBus.departureTime)} 출발 버스가 준비되었습니다. 좌석은 ${seatNo}번이고, ${passengers}인 총 요금은 ${totalFare.toLocaleString()}원입니다. 결제할까요?`)
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [])
 
-  function pay() {
-    if (!selectedBus) return
-    addBooking({ bus: selectedBus, seatNo, passengers, totalCharge, id: Date.now().toString() })
-    appSay('결제가 완료되었습니다. 안전한 여행 되세요.')
-    setTimeout(() => {
-      setSelectedBus(null)
-      setSeat(null)
-      setSelectedSeatNo(null)
-      setSessionId(null)
-      resetMessages()
-      setScreen('home')
-    }, 2000)
+  async function pay() {
+    if (!selectedBus || isPaying) return
+    setIsPaying(true)
+    try {
+      const booking = await createBooking({
+        ownerId: getBookingOwnerId(),
+        bus: selectedBus,
+        seatNo,
+        passengers,
+        totalFare,
+      })
+      addBooking(booking)
+      appSay('결제가 완료되었습니다. 안전한 여행 되세요.')
+      setTimeout(() => {
+        setSelectedBus(null)
+        setSeat(null)
+        setSelectedSeatNo(null)
+        setSessionId(null)
+        resetMessages()
+        setScreen('home')
+      }, 2000)
+    } catch {
+      appSay('예매 정보를 저장하지 못했습니다. 잠시 후 다시 시도해 주세요.')
+    } finally {
+      setIsPaying(false)
+    }
   }
 
   function handleUserSpeak(text: string) {
@@ -119,19 +134,14 @@ export function ConfirmPage() {
             <div><span style={{ color: '#58665f' }}>날짜 </span>{formatDate(selectedBus.departureTime)}</div>
             <div><span style={{ color: '#58665f' }}>등급 </span>{selectedBus.grade}</div>
             <div><span style={{ color: '#58665f' }}>좌석 </span><b style={{ color: '#f07f21' }}>{seatNo}</b></div>
-            <div><span style={{ color: '#58665f' }}>인원 </span><b>{passengers}분</b></div>
-          </div>
-          <div style={{ borderTop: '1px dashed #f0d5b8', margin: '16px 0' }} />
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline' }}>
-            <span style={{ color: '#58665f' }}>
-              {passengers > 1 ? `${selectedBus.charge.toLocaleString()}원 × ${passengers}명` : '요금'}
-            </span>
-            <b style={{ fontSize: '1.2rem' }}>{totalCharge.toLocaleString()}원</b>
+            <div><span style={{ color: '#58665f' }}>인원 </span><b>{passengers}명</b></div>
+            <div><span style={{ color: '#58665f' }}>1인 요금 </span><b>{selectedBus.charge.toLocaleString()}원</b></div>
+            <div style={{ gridColumn: '1 / -1' }}><span style={{ color: '#58665f' }}>총 요금 </span><b style={{ color: '#f07f21' }}>{totalFare.toLocaleString()}원</b></div>
           </div>
         </div>
 
-        <button type="button" className="send-button" onClick={pay} style={{ marginTop: '20px' }}>
-          결제하기
+        <button type="button" className="send-button" onClick={pay} disabled={isPaying} style={{ marginTop: '20px' }}>
+          {isPaying ? '예매 저장 중...' : '결제하기'}
         </button>
 
         <VoicePanel onUserSpeak={handleUserSpeak} />

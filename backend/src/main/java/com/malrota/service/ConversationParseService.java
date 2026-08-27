@@ -73,51 +73,68 @@ public class ConversationParseService {
                                                 ConversationRuleExtractor.RuleParse rules,
                                                 ConversationSession session,
                                                 String rawText) {
-        // 우선순위는 항상 "룰베이스(이번 발화에서 확실히 잡힘) → 세션(이미 확정된 사실) → LLM(추측)" 순
+        // 우선순위는 항상 "룰베이스(이번 발화에서 확실히 잡힘) → 세션(이미 확정된 사실) → LLM(추측)" 순이다.
+        // LLM에게 "언급 없으면 기존 값을 그대로 복사하라"고 프롬프트에 명시했지만, 실제로는 지시를
+        // 놓치고 자기 나름의 기본값(예: 특정 터미널 "서울경부"를 도시명 "서울"로, 인원 2명을 1명으로)을
+        // 되돌려버리는 경우가 있었다. 그래서 LLM 결과를 세션보다 먼저 신뢰하면 이미 확정된 조건이
+        // 아무 말도 안 했는데 갑자기 초기화되는 사고가 난다. LLM은 "룰베이스도 세션도 모르는" 첫 언급을
+        // 보완하는 최후의 수단으로만 쓴다.
         String intent = firstNonBlank(rules.intent(), value(llm, ConversationParseResponse::intent), "BUS_SEARCH");
         String departure = firstNonBlank(rules.departure(), sessionValue(session, ConversationSession::getDeparture), value(llm, ConversationParseResponse::departure));
         String arrival = firstNonBlank(rules.arrival(), sessionValue(session, ConversationSession::getArrival), value(llm, ConversationParseResponse::arrival));
-        
-        // [문맥 기반 단독 터미널명 매핑] "강남", "노포동" 등이 단독으로 들어왔을 때의 방향 결정
+
+        // [문맥 기반 단독 터미널명 매핑] "강남", "노포동" 등이 단독으로 들어왔을 때의 방향 결정.
+        // 출발/도착이 둘 다 복수 터미널 도시라 동시에 애매한 경우(예: 서울→서울), 실제로 "지금
+        // 되묻고 있는" 쪽은 출발지가 우선이다. 이미 구체적인 터미널로 확정된 슬롯은 isMultiTerminalCity가
+        // false를 반환하므로, 단순히 도시가 같다는 이유만으로 이미 확정된 슬롯이 다시 덮어써지지 않는다
+        // — belongsToCity만으로 판단하면 "서울경부"(이미 확정)도 도시가 "서울"이라 아직 애매한 반대편
+        // 슬롯("서울") 대신 잘못 매칭돼버리는 사고가 났었다.
         String standalone = rules.standaloneTerminal();
         boolean standaloneConsumed = false;
         if (standalone != null) {
             String city = TagoClient.cityOf(standalone);
             String sessionDep = sessionValue(session, ConversationSession::getDeparture);
             String sessionArr = sessionValue(session, ConversationSession::getArrival);
-
-            // 출발/도착이 둘 다 복수 터미널 도시라 동시에 애매한 경우, 실제로 "지금 되묻고 있는" 쪽은 checkMultiTerminalCity와 똑같이 출발지가 우선
             String currentlyAskedDirection = TagoClient.isMultiTerminalCity(sessionDep) ? "departure"
                     : TagoClient.isMultiTerminalCity(sessionArr) ? "arrival" : null;
 
-            // 지금 되묻고 있는 출발지 도시를 세부화하는 답변인 경우 (예: 출발지가 "서울"인데 "강남" 입력)
             if (city != null && city.equals(sessionDep) && "departure".equals(currentlyAskedDirection)) {
                 departure = standalone;
                 standaloneConsumed = true;
-            }
-            // 지금 되묻고 있는 도착지 도시를 세부화하는 답변인 경우 (예: 도착지가 "서울"인데 "강남" 입력)
-            else if (city != null && city.equals(sessionArr) && "arrival".equals(currentlyAskedDirection)) {
+            } else if (city != null && city.equals(sessionArr) && "arrival".equals(currentlyAskedDirection)) {
                 arrival = standalone;
                 standaloneConsumed = true;
-            }
-            // 출발지만 있고 도착지가 비어있을 때 단독 입력 -> 도착지로 배정! (예: 부산에서 출발인데 "강남" 입력 -> 도착지: 서울경부)
-            else if (sessionDep != null && sessionArr == null) {
-                arrival = standalone;
-                standaloneConsumed = true;
-            }
-            // 도착지만 있고 출발지가 비어있을 때 단독 입력 -> 출발지로 배정!
-            else if (sessionArr != null && sessionDep == null) {
+            } else if (currentlyAskedDirection == null && belongsToCity(sessionDep, city)) {
+                // 되묻는 중인 애매한 도시가 더 이상 없다면(둘 다 이미 구체적인 터미널로 확정됨),
+                // 같은 도시의 다른 터미널을 말한 건 되물음에 대한 답이 아니라 암묵적인 정정이다.
                 departure = standalone;
                 standaloneConsumed = true;
-            }
-            // 둘 다 비어있을 때 -> 기본 출발지로 설정
-            else if (departure == null) {
+            } else if (currentlyAskedDirection == null && belongsToCity(sessionArr, city)) {
                 arrival = standalone;
+                standaloneConsumed = true;
+            } else if (sessionDep != null && sessionArr == null) {
+                arrival = standalone;
+                standaloneConsumed = true;
+            } else if (sessionArr != null && sessionDep == null) {
+                departure = standalone;
+                standaloneConsumed = true;
+            } else if (departure == null) {
+                departure = standalone;
                 standaloneConsumed = true;
             }
         }
 
-        // [터미널 정정] 같은도시 및 다른도시 터미널 정정 판단로직
+        // [터미널 정정] "대전청사 말고 대전종합으로", "서대구 아니라 동대구로", "광주종합 말고
+        // 동대구로"(아예 다른 도시로 통째로 바꾸는 경우)처럼 이미 확정된 출발/도착 터미널을 다른
+        // 터미널로 바꿔달라는 표현. 어느 쪽(출발/도착)을 바꿀지는 2단계로 판단한다: 1) "말고" 앞쪽
+        // (정정 대상)이 등록된 터미널로 알아들어졌으면, 그 터미널이 속한 도시가 출발/도착 어느 쪽과
+        // 같은지로 확실하게 판단한다 — 새 터미널이 완전히 다른 도시여도(예: 광주→대구) 정확하다.
+        // 2) "말고" 앞쪽이 STT 오인식으로 못 알아들어졌으면(예: "서대구"를 "선대 후"로), 대신 "말고"
+        // 뒤쪽(새 터미널)의 도시가 출발/도착 어느 쪽과 "같은 도시"인지로 판단한다.
+        //
+        // 정정이 적용돼도, 뒤이어 나올 질문(예: 아직 날짜/시간이 안 정해졌으면 그 질문)은 정정 전과
+        // 똑같은 문구일 수 있다 — 그러면 사용자는 정정이 실제로 반영됐는지 전혀 알 수 없다. 그래서
+        // 정정을 확인해 주는 문구를 뒤이은 질문 앞에 붙여, 조용히 반영되고 넘어가는 일이 없게 한다.
         String correction = rules.correctionTerminal();
         String correctionAck = null;
         if (correction != null) {
@@ -126,13 +143,13 @@ public class ConversationParseService {
             String correctionCity = TagoClient.cityOf(correction);
 
             String targetDirection = null;
-            if (rejectedCity != null && sameCity(rejectedCity, departure)) {
+            if (rejectedCity != null && belongsToCity(departure, rejectedCity)) {
                 targetDirection = "departure";
-            } else if (rejectedCity != null && sameCity(rejectedCity, arrival)) {
+            } else if (rejectedCity != null && belongsToCity(arrival, rejectedCity)) {
                 targetDirection = "arrival";
-            } else if (correctionCity != null && sameCity(correctionCity, departure)) {
+            } else if (correctionCity != null && belongsToCity(departure, correctionCity)) {
                 targetDirection = "departure";
-            } else if (correctionCity != null && sameCity(correctionCity, arrival)) {
+            } else if (correctionCity != null && belongsToCity(arrival, correctionCity)) {
                 targetDirection = "arrival";
             }
 
@@ -147,11 +164,17 @@ public class ConversationParseService {
 
         String date = firstNonBlank(rules.date() == null ? null : rules.date().toString(), sessionValue(session, ConversationSession::getDate), value(llm, ConversationParseResponse::date));
 
-        // 정확한 시각과 servicePreference("첫차"/"막차") 양립 불가와 판단 로직
+        // 정확한 시각과 관련된 두 가지 배타 규칙을 모두 적용한다:
+        // 1) 오전/오후 없는 "12시"/"8시"처럼 모호한 시각(ambiguousMeridiem)은 추측해서 확정하지 않는다.
+        // 2) 정확한 시각과 servicePreference("첫차"/"막차")는 서로 배타적인 개념이다. 이번 턴에
+        //    servicePreference가 새로 명시됐는데 새 정확한 시각은 없다면, 세션에 남아있던 옛 정확한
+        //    시각을 다시 끌어오지 않는다 — 안 그러면 "말고 첫차로"라고 정정해도 옛 시각이 계속
+        //    함께 살아남는다. 반대로 새 정확한 시각이 주어졌다면 옛 FIRST/LAST를 밀어낸다.
         boolean freshServicePreference = rules.servicePreference() != null;
         boolean freshDepartureTime = rules.departureTime() != null;
 
-        String departureTime = (freshServicePreference && !freshDepartureTime) ? null
+        String departureTime = rules.ambiguousMeridiem() ? null
+                : (freshServicePreference && !freshDepartureTime) ? null
                 : firstNonBlank(rules.departureTime() == null ? null : rules.departureTime().toString(), sessionValue(session, ConversationSession::getDepartureTime), value(llm, ConversationParseResponse::departureTime));
         String timePreference = firstNonBlank(rules.timePreference(), sessionValue(session, ConversationSession::getTimePreference), value(llm, ConversationParseResponse::timePreference), "ANY");
         String servicePreference = (freshDepartureTime && !freshServicePreference) ? "ANY"
@@ -162,23 +185,32 @@ public class ConversationParseService {
                 : session != null && session.getPassengers() > 0 ? session.getPassengers()
                 : llm != null && llm.passengers() > 0 ? llm.passengers() : 1;
 
-        boolean passengerMentioned = hasPassengerMention(rawText) 
-                || (rules.passengers() > 1) 
-                || (llm != null && llm.passengers() > 1) 
-                || (session != null && session.getPassengers() > 1);
+        boolean passengerMentionedThisTurn = hasPassengerMention(rawText) || rules.passengerMentioned();
+        boolean passengerMentioned = passengerMentionedThisTurn
+                || (session != null && session.isPassengerCountConfirmed());
 
-        List<String> seatPreferences = mergePreferences(session == null ? List.of() : session.getSeatPreferences(),
+        String previousPrompt = sessionValue(session, ConversationSession::getClarificationPrompt);
+        boolean seatPreferenceQuestionPending = previousPrompt != null && previousPrompt.contains(SEAT_PREFERENCE_QUESTION_MARKER);
+        boolean noSeatPreferenceThisTurn = seatPreferenceQuestionPending && isNoSeatPreferenceResponse(rawText);
+        boolean seatPreferenceMentionedThisTurn = rules.seatPreferenceMentioned() || noSeatPreferenceThisTurn;
+        boolean seatPreferenceMentioned = seatPreferenceMentionedThisTurn
+                || (session != null && session.isSeatPreferenceConfirmed());
+
+        // "없어요", "아무렇게나"는 선호를 비워 두되, 선호 질문에 답했다는 사실은 확정한다.
+        // 그래야 같은 질문을 반복하지 않고 좌석 추천기는 기본 규칙으로 자리를 고른다.
+        List<String> seatPreferences = noSeatPreferenceThisTurn ? List.of()
+                : mergePreferences(session == null ? List.of() : session.getSeatPreferences(),
                 llm == null ? null : llm.seatPreferences(), rules.seatPreferences(), rules.seatPreferenceMentioned());
         List<String> accessibilityNeeds = mergePreferences(session == null ? List.of() : session.getAccessibilityNeeds(),
                 llm == null ? null : llm.accessibilityNeeds(), rules.accessibilityNeeds(), rules.accessibilityMentioned());
 
         List<String> missing = missingRequired(departure, arrival, date, departureTime, servicePreference);
-        String previousPrompt = sessionValue(session, ConversationSession::getClarificationPrompt);
-        boolean seatPreferenceAlreadyAsked = previousPrompt != null && previousPrompt.contains(SEAT_PREFERENCE_QUESTION_MARKER);
-        String prompt = clarificationPrompt(missing, departure, arrival, passengers, passengerMentioned, seatPreferenceAlreadyAsked, timePreference);
+        String prompt = clarificationPrompt(missing, departure, arrival, passengers, passengerMentioned,
+                seatPreferenceMentioned, timePreference, rules.ambiguousMeridiem());
 
         // 단독 터미널 답변("센트럴시티" 등)이 들어왔지만 지금 되묻고 있는 도시(예: 대전)와 다른
-        // 도시(예: 서울) 터미널이라 어디에도 반영되지 못한 경우 어느 도시 터미널인지 구체적으로 알려주고 다시 골라달라고 안내한다.
+        // 도시(예: 서울) 터미널이라 어디에도 반영되지 못한 경우, "잘 못 알아들었어요"라는 애매한
+        // 문구 대신 어느 도시 터미널인지 구체적으로 알려주고 다시 골라달라고 안내한다.
         if (standalone != null && !standaloneConsumed) {
             String standaloneCity = TagoClient.cityOf(standalone);
             String ambiguousCity = TagoClient.isMultiTerminalCity(departure) ? departure
@@ -198,29 +230,42 @@ public class ConversationParseService {
             prompt = "죄송해요, 잘 못 알아들었어요. " + prompt;
         }
 
-        // 절대 시각과 상대 시각의 양립 불가
+        // "더 빠른/더 늦은 거 없어?"는 세션에 계속 남는 조건이 아니라 이번 발화 한 번에 대한 요청이다.
+        // 이번 턴에 구체적인 시각(예: "8시로 바꿔줘")을 새로 말한 경우는 그 절대 시각 자체가
+        // 요청이므로 상대적 "더 이르게/늦게" 신호와 겹치지 않게 둔다.
         boolean wantsEarlierBus = rules.wantsEarlierBus() && rules.departureTime() == null;
         boolean wantsLaterBus = rules.wantsLaterBus() && rules.departureTime() == null;
 
         return new ConversationParseResponse(
                 intent, nullIfBlank(departure), nullIfBlank(arrival), nullIfBlank(date),
                 nullIfBlank(departureTime), timePreference, servicePreference, busGradePreference, passengers,
-                seatPreferences, accessibilityNeeds, missing, prompt, wantsEarlierBus, wantsLaterBus
+                passengerMentioned, seatPreferences, seatPreferenceMentioned, accessibilityNeeds,
+                missing, prompt, wantsEarlierBus, wantsLaterBus
         );
     }
 
     /**
-     * value가 city 소속인지 확인
+     * value가 city 소속인지 확인한다. value가 이미 구체적인 터미널명(예: "대전청사")이면
+     * TagoClient.cityOf로 소속 도시를 찾고, 아직 도시명 그 자체(예: "대전", 멀티터미널 미확정)이면
+     * city와 직접 비교한다 — 두 경우 모두 지원해야 정정/단독 응답 표현이 "이미 확정된 터미널"이든
+     * "아직 세부 터미널을 안 고른 도시"든 상관없이 올바른 방향(출발/도착)을 찾을 수 있다.
      */
-    private boolean sameCity(String city, String value) {
-        if (city == null || value == null) return false;
-        return city.equals(value) || city.equals(TagoClient.cityOf(value));
+    private boolean belongsToCity(String terminalOrCity, String city) {
+        if (isBlank(terminalOrCity) || isBlank(city)) return false;
+        return city.equals(terminalOrCity) || city.equals(TagoClient.cityOf(terminalOrCity));
     }
 
     private boolean hasPassengerMention(String text) {
         if (text == null || text.isBlank()) return false;
-        return Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|분|식구)").matcher(text).find()
+        return Pattern.compile("(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|식구|분(?!\\s*(?:뒤|후)))").matcher(text).find()
                 || List.of("혼자", "둘이", "셋이", "넷이", "다섯이", "부부", "데리고", "모시고", "고치", "같이").stream().anyMatch(text::contains);
+    }
+
+    private boolean isNoSeatPreferenceResponse(String text) {
+        if (text == null || text.isBlank()) return false;
+        return List.of("상관없", "아무거나", "아무렇게나", "아무 데나", "아무데나", "아무 자리", "아무자리",
+                "선호 없", "없어요", "없습니다", "없어", "없다", "괜찮", "마음대로", "알아서", "편한 데로", "아니요")
+                .stream().anyMatch(text::contains);
     }
 
     private List<String> mergePreferences(List<String> existing, List<String> llmValues, List<String> ruleValues, boolean explicitlyMentioned) {
@@ -244,23 +289,24 @@ public class ConversationParseService {
         if (isBlank(departure)) missing.add("departure");
         if (isBlank(arrival)) missing.add("arrival");
         if (isBlank(date)) missing.add("date");
-        // "오전"/"오후"만으로는 부족한 정확성을 채우기 위해 정확한 시각(departureTime)이나 "첫차"/"막차"(그 자체로 시각이 하나로 정해짐)만 통과
+        // "오전"/"오후"만으로는 부족하다 — 시간대만 받으면 실제 버스 시각이 중구난방으로 흩어져서
+        // (추천 시간/최저가/다른 시간 3개뿐인) 추천 결과가 사용자 의도와 동떨어질 수 있다. 정확한
+        // 시각(departureTime)이나 "첫차"/"막차"(그 자체로 시각이 하나로 정해짐)만 통과시킨다.
         boolean hasServicePreference = "FIRST".equalsIgnoreCase(servicePref) || "LAST".equalsIgnoreCase(servicePref);
         if (isBlank(depTime) && !hasServicePreference) {
-            missing.add("timePreference");
+            missing.add("departureTime");
         }
         return missing;
     }
 
-    // ConversationParseService.java 내부
-
     // 배려/좌석 선호 질문에 포함되는 고유 문구. 세션에 저장된 "직전 반문"에 이 문구가 있었는지로
-    // "이미 한 번 물어봤는지"를 판단한다 (아래 seatPreferenceAlreadyAsked 참고).
+    // "이미 한 번 물어봤는지"를 판단한다 (아래 seatPreferenceQuestionPending 참고).
     private static final String SEAT_PREFERENCE_QUESTION_MARKER = "더 편하신 좌석이 있으신가요";
 
     private String clarificationPrompt(List<String> missing, String departure, String arrival,
                                        int passengers, boolean passengerMentioned,
-                                       boolean seatPreferenceAlreadyAsked, String timePreference) {
+                                       boolean seatPreferenceMentioned, String timePreference,
+                                       boolean ambiguousMeridiem) {
         // 필수 이동 정보(출발/도착/날짜/시간) 누락 시 질문
         if (!missing.isEmpty()) {
             if (missing.contains("departure") && missing.contains("arrival")) {
@@ -272,14 +318,19 @@ public class ConversationParseService {
             if (missing.contains("arrival")) {
                 return (departure != null && !departure.isBlank() ? departure + "에서 " : "") + "어디로 가시나요?";
             }
-            if (missing.contains("date") && missing.contains("timePreference")) {
+            if (missing.contains("date") && missing.contains("departureTime")) {
                 return "언제 출발하시나요? '내일 아침', '이번 주말 오후'처럼 날짜와 시간대를 편하게 말씀해 주세요.";
             }
             if (missing.contains("date")) {
                 return "출발하시는 날짜를 말씀해 주세요. '오늘', '내일', '이번 주 토요일'처럼 말씀하셔도 됩니다.";
             }
-            if (missing.contains("timePreference")) {
-                // 이미 "오전"/"오후" 같은 시간대는 말씀하셨다면, 정확히 몇 시인지만 좁혀서 묻는다.
+            if (missing.contains("departureTime")) {
+                // 오전/오후 없이 "12시"처럼만 말해 자정인지 정오인지 알 수 없는 경우를 최우선으로 짚어준다.
+                if (ambiguousMeridiem) {
+                    return "입력하신 시간이 오전인지 오후인지 확인이 필요해요. '오전 8시', '오후 3시'처럼 오전 또는 오후를 붙여 말씀해 주세요.";
+                }
+                // 이미 "오전"/"오후" 같은 시간대는 말씀하셨다면, 그걸 무시하고 처음부터 다시 묻지 않고
+                // 그 시간대 안에서 정확히 몇 시인지만 좁혀서 묻는다.
                 String timeOfDayKorean = timeOfDayKorean(timePreference);
                 if (timeOfDayKorean != null) {
                     return String.format("%s 중 정확히 몇 시쯤이 좋으실까요? '%s 9시'처럼 편하게 말씀해 주세요.", timeOfDayKorean, timeOfDayKorean);
@@ -301,9 +352,13 @@ public class ConversationParseService {
             return depStr + arrStr + "표를 찾을게요. 탑승하시는 인원은 총 몇 분이신가요? 표 몇 장 예매해 드릴까요? (혼자이시면 '한 장'이라고 말씀해 주세요.)";
         }
 
-        // 배려/좌석 선호 질문. seatPrefs/accessNeeds가 비어있는지가 아니라 "이 질문을 이미 한 번 했는지"로 판단
-        if (!seatPreferenceAlreadyAsked) {
-            String countStr = passengers > 1 ? passengers + "분" : "1분";
+        // 배려/좌석 선호 질문. "할머니 모시고" 같은 말에서 접근성 배려(ELDERLY_CARE 등)가 자동으로
+        // 추론되어 accessNeeds가 이미 채워져 있더라도, 그건 어디까지나 추론일 뿐 창가/통로 같은
+        // 좌석 자체 선호를 실제로 물어본 적은 없다. seatPrefs/accessNeeds가 비어있는지가 아니라
+        // "이 질문을 이미 한 번 했는지"로 판단해야, 추론 때문에 이 질문 자체가 통째로 생략되어
+        // "좌석 선호를 안 물어봤다"는 사고가 나지 않는다.
+        if (!seatPreferenceMentioned) {
+            String countStr = passengers > 1 ? passengers + "명" : "한 명";
             return String.format("네, %s 자리로 알아볼게요. 혹시 다리가 불편하시거나 창가/통로 등 " + SEAT_PREFERENCE_QUESTION_MARKER + "?", countStr);
         }
 

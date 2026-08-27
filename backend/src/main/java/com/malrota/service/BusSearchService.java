@@ -6,15 +6,17 @@ import com.malrota.dto.response.BusRecommendation;
 import com.malrota.dto.response.BusSchedule;
 import org.springframework.stereotype.Service;
 
-import java.time.Duration;
 import java.time.LocalTime;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Optional;
 
 @Service
 public class BusSearchService {
+
+    /** 요청 시각보다 이른 버스는 최대 2시간 전, 늦은 버스는 최대 30분 후까지만 추천한다. */
+    private static final int MAX_EARLY_MINUTES = 120;
+    private static final int MAX_LATE_MINUTES = 30;
 
     private final TagoClient tagoClient;
 
@@ -40,16 +42,13 @@ public class BusSearchService {
 
         // 운행편 조회 후 등급 필터링 및 시간 조건 정렬
         List<BusSchedule> schedules = tagoClient.searchBuses(depId, arrId, date);
-        return schedules.stream()
+        List<BusSchedule> filtered = schedules.stream()
                 .filter(schedule -> matchesGrade(schedule, request.busGradePreference()))
+                .filter(schedule -> isWithinRequestedTimeWindow(schedule, request))
                 .sorted(scheduleComparator(request))
                 .toList();
+        return filtered;
     }
-    /** "최저가" 후보를 우선 찾아보는 좁은 범위 (기준 시각 ±1시간) */
-    private static final int CHEAPEST_TIME_WINDOW_TIGHT_MINUTES = 60;
-    /** 좁은 범위에 아무것도 없을 때만 넓혀 보는 최대 범위 (기준 시각 ±2시간, 그 이상은 아무리 싸도 제외) */
-    private static final int CHEAPEST_TIME_WINDOW_WIDE_MINUTES = 120;
-
     /** 버스 3개 추천 (가장 가까운 시각 / 가장 저렴 / 근처 시각) */
     public List<BusRecommendation> recommend(BusSearchRequest request) {
         List<BusSchedule> schedules = search(request); // 조회+정렬 재활용
@@ -59,34 +58,32 @@ public class BusSearchService {
         // 1. 가장 맞는 시각 (정렬 결과 첫 번째)
         BusSchedule best = schedules.get(0);
         result.add(new BusRecommendation(best, "말씀하신 시간과 가장 가까운 버스입니다.", "추천 시간"));
+        boolean laterBusAlreadyIncluded = isAfterRequestedTime(best, request);
+        boolean laterBusBeforeCheapest = laterBusAlreadyIncluded;
 
-        // 2. 가장 저렴한 버스 — "말씀하신 시간과 가장 가까운 버스"(best) 기준 ±1시간 이내에서 먼저
-        //    찾고, 그 안에 다른 버스가 아예 없을 때만 ±2시간까지 넓힌다. 그 이상 벗어나면 아무리
-        //    싸도 추천하지 않는다 — 그렇지 않으면 예매하려는 시간대와 동떨어진 새벽 첫차처럼 엉뚱한
-        //    시간의 버스가 "최저가"라고 잡혀버린다.
-        LocalTime bestTime = departureTime(best);
-        BusSchedule cheapest = cheapestWithin(schedules, bestTime, CHEAPEST_TIME_WINDOW_TIGHT_MINUTES)
-                .or(() -> cheapestWithin(schedules, bestTime, CHEAPEST_TIME_WINDOW_WIDE_MINUTES))
-                .orElse(best);
-        if (!isSameBus(cheapest, best)) {
-            result.add(new BusRecommendation(cheapest, "말씀하신 시간대와 가까우면서 가장 저렴한 버스입니다.", "최저가"));
+        // 2. 가장 저렴한 버스
+        // search() 단계에서 이미 "요청 시각 2시간 전 ~ 30분 후"만 남겼으므로,
+        // 새벽 최저가나 너무 늦은 운행편이 후보로 섞이지 않는다.
+        BusSchedule cheapest = schedules.stream()
+                .filter(schedule -> !isSameBus(schedule, best))
+                // 추천 목록에는 요청 시각 뒤 버스를 최대 한 대만 넣고, 나머지는 이전 시간대로 구성한다.
+                .filter(schedule -> !laterBusBeforeCheapest || !isAfterRequestedTime(schedule, request))
+                .min(Comparator.comparingInt(BusSchedule::charge))
+                .orElse(null);
+        if (cheapest != null) {
+            result.add(new BusRecommendation(cheapest, "가장 저렴한 버스입니다.", "최저가"));
+            laterBusAlreadyIncluded = isAfterRequestedTime(cheapest, request);
         }
 
         // 3. 근처 시각 (1,2와 겹치지 않는 다음 버스)
         for (BusSchedule s : schedules) {
-            if (!isSameBus(s, best) && !isSameBus(s, cheapest)) {
+            if (!isSameBus(s, best) && !isSameBus(s, cheapest)
+                    && (!laterBusAlreadyIncluded || !isAfterRequestedTime(s, request))) {
                 result.add(new BusRecommendation(s, "비슷한 시간대의 다른 버스입니다.", "다른 시간"));
                 break;
             }
         }
         return result;
-    }
-
-    /** 기준 시각에서 windowMinutes 이내인 버스 중 가장 싼 것 (없으면 empty) */
-    private Optional<BusSchedule> cheapestWithin(List<BusSchedule> schedules, LocalTime anchor, int windowMinutes) {
-        return schedules.stream()
-                .filter(s -> Math.abs(Duration.between(anchor, departureTime(s)).toMinutes()) <= windowMinutes)
-                .min(Comparator.comparingInt(BusSchedule::charge));
     }
 
     private boolean isSameBus(BusSchedule a, BusSchedule b) {
@@ -101,11 +98,9 @@ public class BusSearchService {
         if (hasText(request.departureTime())) {
             LocalTime requested = parseTime(request.departureTime());
             if (requested != null) {
-                return Comparator.comparingInt((BusSchedule schedule) -> {
-                    LocalTime dep = departureTime(schedule);
-                    // 요청 시각 이전(예: 15:00 이전) 버스는 무조건 뒤로 보냄 (rank 1)
-                    return dep.isBefore(requested) ? 1 : 0;
-                }).thenComparing(byDepartureTime); // 15:00 이후 버스 중 가장 빠른 순서 정렬
+                return Comparator
+                        .comparingInt((BusSchedule schedule) -> minutesFromRequested(departureTime(schedule), requested))
+                        .thenComparing(byDepartureTime);
             }
         }
 
@@ -167,6 +162,27 @@ public class BusSearchService {
             return parsed == null ? LocalTime.MAX : parsed;
         }
         return LocalTime.MAX;
+    }
+
+    /** 정확한 시각을 말한 경우에만 요청 시각 2시간 전부터 30분 후까지 후보를 제한한다. */
+    private boolean isWithinRequestedTimeWindow(BusSchedule schedule, BusSearchRequest request) {
+        if (!hasText(request.departureTime())) return true;
+        LocalTime requested = parseTime(request.departureTime());
+        LocalTime departure = departureTime(schedule);
+        if (requested == null || departure.equals(LocalTime.MAX)) return false;
+        int difference = (int) (departure.toSecondOfDay() - requested.toSecondOfDay()) / 60;
+        return difference >= -MAX_EARLY_MINUTES && difference <= MAX_LATE_MINUTES;
+    }
+
+    private int minutesFromRequested(LocalTime departure, LocalTime requested) {
+        return Math.abs((int) (departure.toSecondOfDay() - requested.toSecondOfDay()) / 60);
+    }
+
+    private boolean isAfterRequestedTime(BusSchedule schedule, BusSearchRequest request) {
+        if (!hasText(request.departureTime())) return false;
+        LocalTime requested = parseTime(request.departureTime());
+        LocalTime departure = departureTime(schedule);
+        return requested != null && !departure.equals(LocalTime.MAX) && departure.isAfter(requested);
     }
 
     private LocalTime parseTime(String value) {
