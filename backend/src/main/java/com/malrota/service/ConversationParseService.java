@@ -48,7 +48,7 @@ public class ConversationParseService {
         // watsonx.ai LLM 호출
         if (watsonxClient != null && watsonxClient.isConfigured()) {
             try {
-                String prompt = buildPrompt(userText, isoDateTime, session);
+                String prompt = buildPrompt(userText, isoDateTime, session, rules);
                 String rawAnswer = watsonxClient.ask(prompt);
                 llmResult = objectMapper.readValue(extractJson(rawAnswer), ConversationParseResponse.class);
             } catch (Exception e) {
@@ -192,7 +192,10 @@ public class ConversationParseService {
         String previousPrompt = sessionValue(session, ConversationSession::getClarificationPrompt);
         boolean seatPreferenceQuestionPending = previousPrompt != null && previousPrompt.contains(SEAT_PREFERENCE_QUESTION_MARKER);
         boolean noSeatPreferenceThisTurn = seatPreferenceQuestionPending && isNoSeatPreferenceResponse(rawText);
-        boolean seatPreferenceMentionedThisTurn = rules.seatPreferenceMentioned() || noSeatPreferenceThisTurn;
+        // 이 질문은 "다리가 불편하시거나 창가/통로 등"처럼 좌석 위치 선호와 배려 사유를 함께 묻는다.
+        // "멀미가 심해서"처럼 위치 키워드 없이 배려 사유만 답해도 이 질문에 답한 것으로 쳐야
+        // 같은 질문이 "잘 못 알아들었어요"와 함께 끝없이 반복되지 않는다.
+        boolean seatPreferenceMentionedThisTurn = rules.seatPreferenceMentioned() || rules.accessibilityMentioned() || noSeatPreferenceThisTurn;
         boolean seatPreferenceMentioned = seatPreferenceMentionedThisTurn
                 || (session != null && session.isSeatPreferenceConfirmed());
 
@@ -408,12 +411,13 @@ public class ConversationParseService {
         return city + " 어느 터미널로 원하시나요? " + options + " 중 편하신 곳을 말씀해 주세요.";
     }
 
-    private String buildPrompt(String text, String isoDateTime, ConversationSession session) {
+    private String buildPrompt(String text, String isoDateTime, ConversationSession session, ConversationRuleExtractor.RuleParse rules) {
         String currentStateJson = session == null ? "{}" : """
                 {"departure":"%s","arrival":"%s","date":"%s","departureTime":"%s","timePreference":"%s","servicePreference":"%s","busGradePreference":"%s","passengers":%d,"seatPreferences":%s,"accessibilityNeeds":%s}
                 """.formatted(jsonValue(session.getDeparture()), jsonValue(session.getArrival()), jsonValue(session.getDate()),
                 jsonValue(session.getDepartureTime()), jsonValue(session.getTimePreference()), jsonValue(session.getServicePreference()),
                 jsonValue(session.getBusGradePreference()), session.getPassengers(), jsonArray(session.getSeatPreferences()), jsonArray(session.getAccessibilityNeeds()));
+        String ruleHintsJson = ruleHintsJson(rules);
 
         return """
         당신은 고령자(디지털 소외계층) 및 교통약자를 위한 고속버스 예매 NLU 인공지능입니다.
@@ -424,8 +428,11 @@ public class ConversationParseService {
         [입력 정보]
         - 기준 시각: %s (Asia/Seoul)
         - 기존 수집 정보: %s
+        - 이번 발화에서 규칙 기반으로 이미 정확히 인식된 값(참고용): %s
 
         [핵심 추출 규칙]
+        0. "이번 발화에서 규칙 기반으로 이미 정확히 인식된 값"에 들어있는 필드는 이미 확실하니 그 값을 그대로 반환하세요.
+           그 값을 무시하거나 다르게 바꾸면 안 됩니다. 이 JSON에 없는 필드만 아래 규칙에 따라 직접 판단하세요.
         1. 지명/터미널: '~행'(부산행 등)은 arrival, '~발'(서울발 등)은 departure에 지명만 저장
         2. 날짜/시간: 기준시각 참고하여 절대날짜(YYYY-MM-DD) 변환. "첫차/시방/빨리"->servicePreference:"FIRST", "막차"->"LAST".
            이번 발화에 관련 언급이 전혀 없으면 기존 수집 정보의 값을 그대로 유지하고, 기존 정보에도 없으면 "ANY"를 반환하세요.
@@ -435,6 +442,9 @@ public class ConversationParseService {
         4. 신체/좌석 배려:
            - 다리/무릎 통증, 도가니, 시큰거림, 삭신, 계단 힘듦 -> accessibilityNeeds에 "WALKING_DIFFICULTY" & seatPreferences에 "FRONT"
            - 멀미, 속 울렁거림, 메스꺼움 -> accessibilityNeeds에 "MOTION_SICKNESS" & seatPreferences에 "MIDDLE"
+           - 임산부, 임신, 만삭 -> accessibilityNeeds에 "PREGNANCY" & seatPreferences에 "FRONT"
+           - 아기/유아/신생아 동반 -> accessibilityNeeds에 "INFANT_CARE" & seatPreferences에 "FRONT"
+           - 시각장애, 안내견 동반 -> accessibilityNeeds에 "VISUAL_IMPAIRMENT" & seatPreferences에 "FRONT"
         5. 등급 선호: "우등"->EXCELLENT, "프리미엄/편한 거"->PREMIUM, "일반/싼 거/싼 놈"->GENERAL, "아무거나"->ANY.
            언급이 없으면 기존 수집 정보의 값을 유지하고, 기존 정보도 없으면 "ANY"를 반환하세요.
         6. 상태 병합(가장 중요): 이번 발화에서 새로 언급된 조건만 갱신하고, 언급되지 않은 나머지 필드는 반드시 [입력 정보]의 "기존 수집 정보" 값을 그대로 복사해서 반환하세요.
@@ -498,9 +508,10 @@ public class ConversationParseService {
         [실제 입력]
         기준 시각: %s
         기존 수집 정보: %s
+        이번 발화에서 규칙 기반으로 이미 정확히 인식된 값: %s
         사용자: "%s"
         결과:
-        """.formatted(isoDateTime, currentStateJson, isoDateTime, currentStateJson, text);
+        """.formatted(isoDateTime, currentStateJson, ruleHintsJson, isoDateTime, currentStateJson, ruleHintsJson, text);
     }
 
     private String extractJson(String raw) {
@@ -532,6 +543,28 @@ public class ConversationParseService {
                 .filter(value -> value != null && !value.isBlank())
                 .map(value -> "\"" + jsonValue(value) + "\"")
                 .collect(Collectors.joining(",", "[", "]"));
+    }
+
+    /**
+     * 룰베이스가 이번 발화에서 이미 확실히 잡아낸 필드만 담은 JSON 힌트. LLM이 룰베이스와
+     * 별개로 맨땅에서 다시 판단하며 값이 갈리는 것을 막기 위해, 확실한 필드는 이 힌트로
+     * 그대로 신뢰하게 하고 LLM은 힌트에 없는(=룰베이스가 못 잡은) 필드만 직접 판단하게 한다.
+     * 언급 안 된 필드는 아예 키 자체를 넣지 않는다 — null/빈 값과 "안 물어봄"을 구분하기 위해서다.
+     */
+    private String ruleHintsJson(ConversationRuleExtractor.RuleParse rules) {
+        if (rules == null) return "{}";
+        List<String> fields = new ArrayList<>();
+        if (!isBlank(rules.departure())) fields.add("\"departure\":\"" + jsonValue(rules.departure()) + "\"");
+        if (!isBlank(rules.arrival())) fields.add("\"arrival\":\"" + jsonValue(rules.arrival()) + "\"");
+        if (rules.date() != null) fields.add("\"date\":\"" + rules.date() + "\"");
+        if (rules.departureTime() != null) fields.add("\"departureTime\":\"" + rules.departureTime() + "\"");
+        if (!isBlank(rules.timePreference())) fields.add("\"timePreference\":\"" + rules.timePreference() + "\"");
+        if (!isBlank(rules.servicePreference())) fields.add("\"servicePreference\":\"" + rules.servicePreference() + "\"");
+        if (!isBlank(rules.busGradePreference())) fields.add("\"busGradePreference\":\"" + rules.busGradePreference() + "\"");
+        if (rules.passengers() > 0) fields.add("\"passengers\":" + rules.passengers());
+        if (!rules.seatPreferences().isEmpty()) fields.add("\"seatPreferences\":" + jsonArray(rules.seatPreferences()));
+        if (!rules.accessibilityNeeds().isEmpty()) fields.add("\"accessibilityNeeds\":" + jsonArray(rules.accessibilityNeeds()));
+        return fields.isEmpty() ? "{}" : "{" + String.join(",", fields) + "}";
     }
 
     private String sessionValue(ConversationSession session, SessionStringGetter getter) {

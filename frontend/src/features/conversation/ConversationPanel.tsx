@@ -1,4 +1,4 @@
-import { useState } from 'react'
+import { useEffect, useState } from 'react'
 import { parseConversation, recommendBuses } from '../../api/conversationApi'
 import { ApiError } from '../../api/httpClient'
 import { useAppState } from './AppState'
@@ -8,7 +8,7 @@ import type { ConversationSessionResult } from './types'
 export function ConversationPanel() {
   const {
     sessionId, setSessionId,
-    addMessage, setScreen,
+    messages, addMessage, setScreen,
     setSeatPreferences, setAccessibilityNeeds,
     setPassengers,
     setRecommendations,
@@ -20,6 +20,16 @@ export function ConversationPanel() {
     addMessage('app', t)
     speak(t)
   }
+
+  // 아직 아무 대화도 없는(맨 처음 안내 문구만 있는) 상태로 화면에 들어오면, 다른 안내와
+  // 마찬가지로 이 첫 질문도 음성으로 들려준다 — 글자로만 떠 있고 음성 안내가 없으면
+  // 음성 우선 앱에서 사용자가 뭘 해야 할지 놓치기 쉽다.
+  useEffect(() => {
+    if (messages.length === 1) {
+      speak(messages[0].text)
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [])
 
   async function handleUserSpeak(sendText: string) {
     addMessage('user', sendText)
@@ -39,7 +49,9 @@ export function ConversationPanel() {
         const dt = session.date && session.date !== 'null' ? session.date : null
 
         const departureTime = session.departureTime && session.departureTime !== 'null' ? session.departureTime : null
-        if (!dep || !arr || !dt || !departureTime) {
+        // "첫차"/"막차"는 그 자체로 출발 시각이 정해지므로 departureTime 없이도 충분하다.
+        const hasServicePreference = session.servicePreference === 'FIRST' || session.servicePreference === 'LAST'
+        if (!dep || !arr || !dt || (!departureTime && !hasServicePreference)) {
           // 안전망: 혹시 필수값 없으면 되묻기
           appSay('출발지, 도착지, 날짜와 정확한 출발 시간을 말씀해 주세요.')
         } else {

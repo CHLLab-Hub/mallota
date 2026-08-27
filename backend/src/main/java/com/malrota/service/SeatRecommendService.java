@@ -69,7 +69,10 @@ public class SeatRecommendService {
         if (prefs.contains("FRONT")) return "FRONT";
         if (prefs.contains("MIDDLE")) return "MIDDLE";
         if (prefs.contains("BACK")) return "BACK";
-        if (access.contains("WALKING_DIFFICULTY") || access.contains("ELDERLY_CARE")) return "FRONT";
+        if (access.contains("WALKING_DIFFICULTY") || access.contains("ELDERLY_CARE")
+                || access.contains("PREGNANCY") || access.contains("INFANT_CARE") || access.contains("VISUAL_IMPAIRMENT")) {
+            return "FRONT";
+        }
         if (access.contains("MOTION_SICKNESS")) return "MIDDLE";
         return "ANY";
     }
@@ -559,6 +562,11 @@ public class SeatRecommendService {
         if (access.contains("WALKING_DIFFICULTY") && seat.side().equals("AISLE")) score += 8;
         if (!explicitPositionGiven && access.contains("MOTION_SICKNESS") && seat.position().equals("MIDDLE")) score += 12;
         if (!explicitPositionGiven && access.contains("ELDERLY_CARE") && seat.position().equals("FRONT")) score += 10;
+        if (!explicitPositionGiven && access.contains("PREGNANCY") && seat.position().equals("FRONT")) score += 15;
+        if (access.contains("PREGNANCY") && seat.side().equals("AISLE")) score += 8;
+        if (!explicitPositionGiven && access.contains("INFANT_CARE") && seat.position().equals("FRONT")) score += 10;
+        if (!explicitPositionGiven && access.contains("VISUAL_IMPAIRMENT") && seat.position().equals("FRONT")) score += 15;
+        if (access.contains("VISUAL_IMPAIRMENT") && seat.side().equals("AISLE")) score += 8;
 
         if (prefs.contains("FRONT") && seat.position().equals("FRONT")) score += 6;
         if (prefs.contains("MIDDLE") && seat.position().equals("MIDDLE")) score += 6;
@@ -587,6 +595,21 @@ public class SeatRecommendService {
         }
         if (!explicitPositionGiven && access.contains("ELDERLY_CARE") && seat.position().equals("FRONT")) {
             reasons.add("승하차가 편한 앞쪽 좌석입니다.");
+        }
+        if (!explicitPositionGiven && access.contains("PREGNANCY") && seat.position().equals("FRONT")) {
+            reasons.add("임산부분이시라 승하차 편한 앞쪽 좌석입니다.");
+        }
+        if (access.contains("PREGNANCY") && seat.side().equals("AISLE")) {
+            reasons.add("화장실 이용이 편한 통로 쪽 좌석입니다.");
+        }
+        if (!explicitPositionGiven && access.contains("INFANT_CARE") && seat.position().equals("FRONT")) {
+            reasons.add("아기와 함께 타셔서 기사님·승무원 도움을 받기 편한 앞쪽 좌석입니다.");
+        }
+        if (!explicitPositionGiven && access.contains("VISUAL_IMPAIRMENT") && seat.position().equals("FRONT")) {
+            reasons.add("승무원 도움을 받기 편한 앞쪽 좌석입니다.");
+        }
+        if (access.contains("VISUAL_IMPAIRMENT") && seat.side().equals("AISLE")) {
+            reasons.add("이동이 편한 통로 쪽 좌석입니다.");
         }
         if (prefs.contains("MIDDLE") && seat.position().equals("MIDDLE")) {
             reasons.add("중간 좌석을 선호하셔서 가운데 좌석입니다.");

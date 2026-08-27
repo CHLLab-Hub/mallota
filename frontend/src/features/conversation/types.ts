@@ -2,7 +2,13 @@ export type TimePreference = 'MORNING' | 'AFTERNOON' | 'EVENING' | 'ANY'
 
 export type SeatPreference = 'FRONT' | 'WINDOW' | 'AISLE' | 'ADJACENT'
 
-export type AccessibilityNeed = 'WALKING_DIFFICULTY' | 'MOTION_SICKNESS'
+export type AccessibilityNeed =
+  | 'WALKING_DIFFICULTY'
+  | 'MOTION_SICKNESS'
+  | 'ELDERLY_CARE'
+  | 'PREGNANCY'
+  | 'INFANT_CARE'
+  | 'VISUAL_IMPAIRMENT'
 
 export interface SearchCondition {
   departure?: string

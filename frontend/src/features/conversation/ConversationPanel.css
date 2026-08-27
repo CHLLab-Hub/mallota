@@ -8,13 +8,14 @@
   gap: 14px;
 }
 
-/* 대화 내용만 따로 스크롤되게 해서, 메시지가 쌓여도 마이크 버튼은 항상 화면에 바로 보이게 한다 */
+/* 대화 내용만 따로 스크롤되게 해서, 메시지가 쌓여도 마이크 버튼은 항상 화면에 바로 보이게 한다.
+   높이를 말풍선 두 개 정도로 고정해, 스마트폰 화면 한 번에 대화가 다 안 잡히고 마이크 버튼이
+   아래로 밀려나는 문제를 막는다 — 그 이전 대화는 스크롤해서 볼 수 있다. */
 .chat-messages {
   display: flex;
   flex-direction: column;
   gap: 14px;
-  max-height: 45vh;
-  min-height: 120px;
+  height: 220px;
   overflow-y: auto;
   overscroll-behavior: contain;
   padding-right: 4px;

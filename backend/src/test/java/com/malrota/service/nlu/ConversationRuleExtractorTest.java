@@ -46,6 +46,13 @@ class ConversationRuleExtractorTest {
     }
 
     @Test
+    void recognizes_pregnancy_infant_and_visual_impairment_accessibility_needs() {
+        assertThat(extractor.extract("임산부라 좌석 부탁드려요", base).accessibilityNeeds()).containsExactly("PREGNANCY");
+        assertThat(extractor.extract("신생아 데리고 타요", base).accessibilityNeeds()).containsExactly("INFANT_CARE");
+        assertThat(extractor.extract("시각장애가 있어서 안내견과 함께 타요", base).accessibilityNeeds()).containsExactly("VISUAL_IMPAIRMENT");
+    }
+
+    @Test
     void resolves_relative_hour_and_explicit_seat_correction() {
         var timeResult = extractor.extract("3시간 뒤 부산 가는 버스", base);
         var seatResult = extractor.extract("창가 말고 통로로 바꿔줘", base);

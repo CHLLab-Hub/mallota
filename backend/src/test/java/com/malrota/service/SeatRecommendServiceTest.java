@@ -72,6 +72,48 @@ class SeatRecommendServiceTest {
     }
 
     @Test
+    @DisplayName("임산부(PREGNANCY) 시 승하차 편한 통로 쪽 앞자리 우선 추천")
+    void prioritizes_front_aisle_seat_for_pregnancy() {
+        SeatRecommendService service = serviceWith(List.of(
+                new Seat("1A", 1, 1, "FRONT", "AISLE", true),
+                new Seat("8B", 8, 2, "BACK", "WINDOW", true)
+        ));
+
+        var result = service.recommend(new SeatRecommendRequest("우등", List.of(), List.of("PREGNANCY"), 1));
+
+        assertThat(result.bestSeat().seatNo()).isEqualTo("1A");
+        assertThat(result.reasons()).contains("임산부분이시라 승하차 편한 앞쪽 좌석입니다.", "화장실 이용이 편한 통로 쪽 좌석입니다.");
+    }
+
+    @Test
+    @DisplayName("영유아 동반(INFANT_CARE) 시 승무원 도움받기 편한 앞자리 우선 추천")
+    void prioritizes_front_seat_for_infant_care() {
+        SeatRecommendService service = serviceWith(List.of(
+                new Seat("1A", 1, 1, "FRONT", "AISLE", true),
+                new Seat("8B", 8, 2, "BACK", "WINDOW", true)
+        ));
+
+        var result = service.recommend(new SeatRecommendRequest("우등", List.of(), List.of("INFANT_CARE"), 1));
+
+        assertThat(result.bestSeat().seatNo()).isEqualTo("1A");
+        assertThat(result.reasons()).contains("아기와 함께 타셔서 기사님·승무원 도움을 받기 편한 앞쪽 좌석입니다.");
+    }
+
+    @Test
+    @DisplayName("시각장애(VISUAL_IMPAIRMENT) 시 승무원 도움받기 편한 통로 쪽 앞자리 우선 추천")
+    void prioritizes_front_aisle_seat_for_visual_impairment() {
+        SeatRecommendService service = serviceWith(List.of(
+                new Seat("1A", 1, 1, "FRONT", "AISLE", true),
+                new Seat("8B", 8, 2, "BACK", "WINDOW", true)
+        ));
+
+        var result = service.recommend(new SeatRecommendRequest("우등", List.of(), List.of("VISUAL_IMPAIRMENT"), 1));
+
+        assertThat(result.bestSeat().seatNo()).isEqualTo("1A");
+        assertThat(result.reasons()).contains("승무원 도움을 받기 편한 앞쪽 좌석입니다.", "이동이 편한 통로 쪽 좌석입니다.");
+    }
+
+    @Test
     @DisplayName("명시한 뒷좌석 선호는 보행 배려의 자동 앞좌석 추천보다 우선한다")
     void explicit_back_preference_overrides_automatic_front_accessibility_boost() {
         SeatRecommendService service = serviceWith(List.of(

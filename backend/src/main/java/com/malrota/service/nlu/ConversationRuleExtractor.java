@@ -413,6 +413,15 @@ public class ConversationRuleExtractor {
         if (List.of("멀미", "속이 메스", "울렁", "토해", "옴팡지게").stream().anyMatch(text::contains)) {
             result.add("MOTION_SICKNESS");
         }
+        if (List.of("임산부", "임신", "만삭", "배가 불러").stream().anyMatch(text::contains)) {
+            result.add("PREGNANCY");
+        }
+        if (List.of("아기", "유아", "젖먹이", "신생아", "돌쟁이").stream().anyMatch(text::contains)) {
+            result.add("INFANT_CARE");
+        }
+        if (List.of("시각장애", "안내견", "앞이 안 보", "앞이 잘 안 보").stream().anyMatch(text::contains)) {
+            result.add("VISUAL_IMPAIRMENT");
+        }
         return result;
     }
 
@@ -509,7 +518,9 @@ public class ConversationRuleExtractor {
     }
 
     private boolean hasAccessibilityExpression(String text) {
-        return List.of("다리", "무릎", "허리", "어르신", "할머니", "할아버지", "손주", "영감", "멀미", "도가니", "시큰", "삭신").stream().anyMatch(text::contains);
+        return List.of("다리", "무릎", "허리", "어르신", "할머니", "할아버지", "손주", "영감", "멀미", "도가니", "시큰", "삭신",
+                "임산부", "임신", "만삭", "배가 불러", "아기", "유아", "젖먹이", "신생아", "돌쟁이",
+                "시각장애", "안내견", "앞이 안 보", "앞이 잘 안 보").stream().anyMatch(text::contains);
     }
 
     public record RuleParse(
