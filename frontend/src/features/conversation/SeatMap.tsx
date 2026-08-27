@@ -145,8 +145,8 @@ export function SeatMap({ seats, recommendedNo, alternativeNos, selectedNo, onSe
   }
 
   return (
-    <div style={{ marginTop: '20px' }}>
-      <h3>좌석 배치도</h3>
+    <div style={{ marginTop: '4px' }}>
+      <h3 style={{ margin: '0 0 8px' }}>좌석 배치도</h3>
       <div style={{ textAlign: 'right', marginBottom: '8px', color: '#64748b' }}>🚍 앞 (운전석)</div>
 
       {/* 줄 수가 많으면 화면이 다른 창보다 훨씬 길어지므로, 배치도만 따로 스크롤되게 높이를 제한한다 */}

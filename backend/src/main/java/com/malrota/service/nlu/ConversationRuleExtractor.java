@@ -77,6 +77,15 @@ public class ConversationRuleExtractor {
     private static final Pattern PASSENGER_PATTERN = Pattern.compile("(?<![가-힣])(\\d+|[한두세네다섯여섯]+)\\s*(?:명|장|인|자리|좌석|표|사람|식구|분(?!\\s*(?:뒤|후)))");
 
     public RuleParse extract(String text, LocalDateTime baseDateTime) {
+        return extract(text, baseDateTime, null);
+    }
+
+    /**
+     * knownTimePreference: 세션에 이미 확정된 시간대(MORNING/AFTERNOON/EVENING/NIGHT)가 있으면
+     * 전달한다. "내일 오후"라고 말해둔 뒤 되묻는 질문에 "8시"라고만 답해도(오전/오후를 다시 안
+     * 붙여도), 이 힌트로 오후 8시임을 판단해 매번 되묻는 일이 없게 하기 위해서다.
+     */
+    public RuleParse extract(String text, LocalDateTime baseDateTime, String knownTimePreference) {
         String input = text == null ? "" : text.trim();
 
         // 발화 전체가 등록된 터미널명/별칭 그 자체와 완전히 일치하는 경우("부산서부" 등 반문에 대한 단답)를 최우선으로 식별한다.
@@ -149,7 +158,7 @@ public class ConversationRuleExtractor {
         String textForTimeExtraction = afterLastCorrectionKeyword(input);
 
         // 날짜, 시간, 좌석, 약자, 인원 추출
-        DateTimeResolution resolution = resolveDateTime(textForTimeExtraction, baseDateTime);
+        DateTimeResolution resolution = resolveDateTime(textForTimeExtraction, baseDateTime, knownTimePreference);
         List<String> seats = extractSeatPreferences(input);
         List<String> needs = extractAccessibilityNeeds(input);
         int passengerCount = extractPassengers(input);
@@ -224,7 +233,7 @@ public class ConversationRuleExtractor {
         return TagoClient.resolveCanonicalName(clean);
     }
 
-    private DateTimeResolution resolveDateTime(String text, LocalDateTime base) {
+    private DateTimeResolution resolveDateTime(String text, LocalDateTime base, String knownTimePreference) {
         LocalDate date = null;
         LocalTime time = null;
 
@@ -268,14 +277,26 @@ public class ConversationRuleExtractor {
 
             // ampm은 "8시"처럼 오전/오후 표현 없이 시각만 말한 경우 null일 수 있다 (List.of(...).contains(null)은
             // NullPointerException을 던지므로 반드시 null 체크 후에 검사해야 한다).
-            if (ampm != null && List.of("오후", "저녁", "밤", "심야").contains(ampm) && hour < 12) hour += 12;
-            else if (ampm != null && List.of("낮", "점심").contains(ampm) && hour <= 6) hour += 12;
-            else if (ampm != null && List.of("오전", "새벽", "아침").contains(ampm) && hour == 12) hour = 0;
-
-            // 오전/오후 없는 12시는 자정과 정오 중 어느 쪽인지 알 수 없다. 오전/오후가 없는 시각은
-            // 24시간제인지 12시간제인지도 알 수 없으므로 추측하지 않고 확정하지 않는다
-            // (hasAmbiguousMeridiem이 이 경우를 감지해 사용자에게 다시 물어보게 한다).
-            if (ampm == null) continue;
+            if (ampm != null) {
+                if (List.of("오후", "저녁", "밤", "심야").contains(ampm) && hour < 12) hour += 12;
+                else if (List.of("낮", "점심").contains(ampm) && hour <= 6) hour += 12;
+                else if (List.of("오전", "새벽", "아침").contains(ampm) && hour == 12) hour = 0;
+            } else if (knownTimePreference != null && !knownTimePreference.isBlank()
+                    && !"ANY".equalsIgnoreCase(knownTimePreference)) {
+                // 실제로 보고된 사례: "내일 오후"라고 이미 말해둔 상태에서 되묻는 질문에 "8시"라고만
+                // 답해도, 이번 발화에 오전/오후가 없다는 이유로 매번 다시 되물었다. 세션에 이미
+                // 확정된 시간대가 있으면 그걸로 오전/오후를 판단해 바로 확정한다.
+                if ("MORNING".equalsIgnoreCase(knownTimePreference)) {
+                    if (hour == 12) hour = 0;
+                } else if (hour < 12) {
+                    hour += 12;
+                }
+            } else {
+                // 오전/오후 없는 12시는 자정과 정오 중 어느 쪽인지 알 수 없다. 세션에도 확정된
+                // 시간대가 없으면 24시간제인지 12시간제인지도 알 수 없으므로 추측하지 않는다
+                // (hasAmbiguousMeridiem이 이 경우를 감지해 사용자에게 다시 물어보게 한다).
+                continue;
+            }
             if (hour < 24 && minute < 60) time = LocalTime.of(hour, minute);
         }
 

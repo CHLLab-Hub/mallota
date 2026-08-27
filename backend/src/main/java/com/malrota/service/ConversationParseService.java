@@ -41,8 +41,10 @@ public class ConversationParseService {
         String isoDateTime = now.format(DateTimeFormatter.ISO_LOCAL_DATE_TIME) + "+09:00";
         String userText = extractRequestText(request);
 
-        // 룰베이스 추출기 1차 실행 (시간 정규화 & 안전망)
-        ConversationRuleExtractor.RuleParse rules = ruleExtractor.extract(userText, now);
+        // 룰베이스 추출기 1차 실행 (시간 정규화 & 안전망). 세션에 이미 확정된 시간대(오전/오후 등)를
+        // 함께 넘겨서, "오후"라고 말해둔 뒤 "8시"라고만 답해도 오전/오후를 다시 안 물어보게 한다.
+        ConversationRuleExtractor.RuleParse rules = ruleExtractor.extract(userText, now,
+                sessionValue(session, ConversationSession::getTimePreference));
         ConversationParseResponse llmResult = null;
 
         // watsonx.ai LLM 호출

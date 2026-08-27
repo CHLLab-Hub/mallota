@@ -165,6 +165,21 @@ class ConversationParseServiceTest {
     }
 
     @Test
+    void resolves_a_bare_hour_using_the_time_of_day_already_confirmed_in_the_session() {
+        // 실제로 보고된 사고: "내일 오후"라고 이미 말해서 timePreference=AFTERNOON이 세션에 확정된
+        // 상태에서, 되묻는 질문에 오전/오후 없이 "8시"라고만 답하면 매번 "오전인지 오후인지
+        // 확인이 필요해요"라며 되물었다. 세션에 이미 확정된 시간대가 있으면 그걸로 판단해야 한다.
+        ConversationSession session = new ConversationSession("s1");
+        session.mergeConditions("서울", "대전", "2026-08-28", null, "AFTERNOON", "ANY", "ANY",
+                1, session.getSeatPreferences(), session.getAccessibilityNeeds(), null);
+
+        ConversationParseResponse r = service.parse(new ConversationParseRequest("8시요", "s1"), session);
+
+        assertThat(r.departureTime()).isEqualTo("20:00");
+        assertThat(r.missingFields()).doesNotContain("departureTime");
+    }
+
+    @Test
     void recognizes_common_mishearings_of_cheotcha_as_first_bus() {
         // "저차", "쳐차"는 음성 인식이 "첫차"를 잘못 받아적은 실제 사용자 보고 사례.
         ConversationSession session = new ConversationSession("s1");
