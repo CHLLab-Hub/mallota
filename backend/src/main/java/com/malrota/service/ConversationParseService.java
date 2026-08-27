@@ -385,7 +385,7 @@ public class ConversationParseService {
         if (!passengerMentioned) {
             String depStr = (departure != null && !departure.isBlank()) ? departure + "에서 " : "";
             String arrStr = (arrival != null && !arrival.isBlank()) ? arrival + " 가는 " : "";
-            return depStr + arrStr + "표를 찾을게요. 탑승하시는 인원은 총 몇 분이신가요? 표 몇 장 예매해 드릴까요? (혼자이시면 '한 장'이라고 말씀해 주세요.)";
+            return depStr + arrStr + "표를 찾을게요. 탑승하시는 인원은 총 몇 분이신가요? (혼자이시면 '한 명'이라고 말씀해 주세요.)";
         }
 
         // 배려/좌석 선호 질문. "할머니 모시고" 같은 말에서 접근성 배려(ELDERLY_CARE 등)가 자동으로
