@@ -105,4 +105,8 @@ export interface ConversationSessionResult {
   wantsLaterBus: boolean
   // 출발지-도착지 사이에 직행 노선 자체가 없다는 1회성 신호 — true면 세션을 초기화해야 한다.
   routeNotFound: boolean
+  // LLM이 STT 오인식을 문맥으로 교정한 원문(예: "이런 트렌치" -> "이런 센트럴시티"). 세션에
+  // 남지 않는 1회성 신호 — 방금 사용자 말풍선으로 보여준 원본 STT 텍스트를 이 값으로 갱신해서
+  // 실제로 이해한 내용과 화면에 보이는 게 다르게 보이지 않게 한다.
+  correctedText: string | null
 }

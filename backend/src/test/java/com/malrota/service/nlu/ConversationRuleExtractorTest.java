@@ -2,6 +2,7 @@ package com.malrota.service.nlu;
 
 import org.junit.jupiter.api.Test;
 
+import java.time.LocalDate;
 import java.time.LocalDateTime;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -9,6 +10,77 @@ import static org.assertj.core.api.Assertions.assertThat;
 class ConversationRuleExtractorTest {
 
     private final ConversationRuleExtractor extractor = new ConversationRuleExtractor();
+
+    @Test
+    void treats_chocheong_as_a_stt_mishearing_of_cheotcha() {
+        // 실제로 보고된 사고: STT가 "첫차"를 "초청"으로 잘못 받아쓴다("저차"/"쳐차"와 같은 종류의
+        // 오인식). 이 앱은 초청장 예약 같은 기능이 없으므로 안전하게 "첫차"로 간주한다.
+        var result = extractor.extract("매일 아침 초청", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.servicePreference()).isEqualTo("FIRST");
+    }
+
+    @Test
+    void recognizes_a_terminal_name_split_by_a_spurious_space_and_the_butak_ending() {
+        // 실제로 보고된 사고: "서울 경부로 부탁해요"에서 (1) "서울"과 "경부" 사이에 공백이 끼어들어
+        // "서울경부"와 정확히 일치하지 않았고, (2) "부탁해요"라는 종결 어미 자체가 도착지 어미
+        // 목록(가다/도착)에 없어서 이중으로 인식이 실패했다.
+        var result = extractor.extract("서울 경부로 부탁해요", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.arrival()).isEqualTo("서울경부");
+    }
+
+    @Test
+    void does_not_collapse_a_space_that_is_a_real_word_boundary() {
+        // 실제로 보고된 사고: "천안에서 부산가는"에서 "에[서] 부산"이 "서부산"(부산서부의 별칭)과
+        // 우연히 겹쳐서, "에서"의 "서"와 "부산"이 하나로 잘못 합쳐졌다("천안에서부산가는"). 매칭
+        // 시작 지점 바로 앞이 이미 한글(다른 단어 중간)이면 진짜 터미널명이 아니므로 제외해야 한다.
+        var result = extractor.extract("천안에서 부산가는 버스 알려줘", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.departure()).isEqualTo("천안고속");
+        assertThat(result.arrival()).isEqualTo("부산");
+    }
+
+    @Test
+    void does_not_double_count_a_correction_target_as_a_fresh_arrival_statement() {
+        // 실제로 보고된 사고: "대전청사 말고 대전터미널로 부탁해"에서 "대전터미널로 부탁"이 정정
+        // 문구(말고 뒤)이자 동시에 일반 도착지 문형(부탁 어미)에도 걸려서, 같은 지명이 "정정 대상"과
+        // "새로 언급된 도착지" 양쪽으로 중복 인식되며 충돌했다.
+        var result = extractor.extract("대전청사 말고 대전터미널로 부탁해", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.arrival()).isNull();
+        assertThat(result.correctionTerminal()).isEqualTo("대전복합");
+        assertThat(result.rejectedTerminal()).isEqualTo("대전청사");
+    }
+
+    @Test
+    void treats_maeil_as_a_stt_mishearing_of_naeil() {
+        // 실제로 보고된 사고: STT가 "내일"을 "매일"로 잘못 받아쓴다(ㄴ/ㅁ 자음 혼동이라 모음 혼동
+        // 보정으로는 못 잡는다). 이 앱은 특정 하루짜리 예매만 다루므로 "매일"이 실제로 "매번/반복"
+        // 의미로 쓰일 문맥이 없어, 안전하게 "내일"로 간주해야 한다.
+        var result = extractor.extract("매일 아침 첫 차로 예매해줘", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.date()).isEqualTo(LocalDate.of(2026, 8, 25));
+    }
+
+    @Test
+    void flags_this_weekend_as_ambiguous_between_saturday_and_sunday() {
+        // 실제로 보고된 사고: "이번 주말"을 임의로 토요일로 조용히 확정해버려서, 사용자가 일요일을
+        // 의도했어도 확인 없이 넘어갔다. 요일까지 명시하지 않았다면 추측하지 말고 되물어야 한다.
+        var result = extractor.extract("이번 주말 오후에 갈게요", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.date()).isNull();
+        assertThat(result.ambiguousWeekend()).isTrue();
+    }
+
+    @Test
+    void does_not_flag_weekend_as_ambiguous_once_a_specific_day_is_named() {
+        // "이번 주말 토요일"처럼 요일까지 명시하면 더 이상 애매하지 않다.
+        var result = extractor.extract("이번 주말 토요일 오후에 갈게요", LocalDateTime.of(2026, 8, 24, 10, 0));
+
+        assertThat(result.date()).isNotNull();
+        assertThat(result.ambiguousWeekend()).isFalse();
+    }
 
     @Test
     void captures_an_unregistered_place_name_stated_as_the_arrival() {

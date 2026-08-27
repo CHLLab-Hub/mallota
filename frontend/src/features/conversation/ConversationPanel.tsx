@@ -58,7 +58,7 @@ function buildConditionSummary(
 export function ConversationPanel() {
   const {
     sessionId, setSessionId,
-    messages, addMessage, setScreen,
+    messages, addMessage, updateLastUserMessage, setScreen,
     setSeatPreferences, setAccessibilityNeeds,
     setPassengers,
     setRecommendations,
@@ -87,6 +87,13 @@ export function ConversationPanel() {
 
     try {
       const session: ConversationSessionResult = await parseConversation(sendText, sessionId)
+
+      // LLM이 STT 오인식을 문맥으로 교정했으면(예: "이런 트렌치" -> "이런 센트럴시티"), 방금
+      // 원본(오인식) 텍스트로 띄워둔 사용자 말풍선을 실제로 이해한 내용으로 바꿔 보여준다 —
+      // 안 그러면 화면에 보이는 말과 실제로 처리된 내용이 달라 보여서 혼란스럽다.
+      if (session.correctedText && session.correctedText !== sendText) {
+        updateLastUserMessage(session.correctedText)
+      }
 
       if (session.routeNotFound) {
         // 노선 확인에 실패해도 서버(ConversationParseService)가 이번 실패와 무관한 정보(예:

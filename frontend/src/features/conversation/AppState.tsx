@@ -18,6 +18,9 @@ interface AppStateValue {
 
   messages: ChatMessage[]
   addMessage: (role: 'app' | 'user', text: string) => void
+  // 가장 최근 사용자 말풍선의 텍스트를 갱신한다 — LLM이 STT 오인식을 교정한 텍스트가 나중에
+  // 도착했을 때, 화면에 이미 표시된 원본(오인식) 텍스트를 실제로 이해한 내용으로 바꿔 보여주기 위해서다.
+  updateLastUserMessage: (text: string) => void
   resetMessages: () => void
 
   buses: BusSchedule[]
@@ -89,6 +92,15 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
   function addMessage(role: 'app' | 'user', text: string) {
     setMessages((prev) => [...prev, { role, text }])
   }
+  function updateLastUserMessage(text: string) {
+    setMessages((prev) => {
+      const lastUserIndex = prev.map((m) => m.role).lastIndexOf('user')
+      if (lastUserIndex === -1) return prev
+      const next = [...prev]
+      next[lastUserIndex] = { role: 'user', text }
+      return next
+    })
+  }
   function resetMessages() {
     setMessages([initialMessage])
   }
@@ -106,7 +118,7 @@ export function AppStateProvider({ children }: { children: ReactNode }) {
       value={{
         screen, setScreen,
         sessionId, setSessionId,
-        messages, addMessage, resetMessages,
+        messages, addMessage, updateLastUserMessage, resetMessages,
         buses, setBuses,
         recommendations, setRecommendations,
         selectedBus, setSelectedBus,

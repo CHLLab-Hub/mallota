@@ -79,6 +79,38 @@ class ConversationParseServiceTest {
     }
 
     @Test
+    void preserves_unrelated_fields_when_reporting_a_route_failure() {
+        // 실제로 보고된 사고: "노선을 찾지 못했다" 응답을 만들 때 인원/좌석선호/접근성 등 이번
+        // 실패와 무관한 필드를 전부 기본값(1명, 빈 리스트)으로 하드코딩해서 반환했다.
+        // mergeConditions는 null만 "언급 없음=기존 값 유지"로 해석하고 빈 리스트/숫자는 실제
+        // 값으로 덮어써 버려서, 노선 문제를 한 번이라도 겪으면 이미 답했던 인원수("2명")나
+        // 배려사항("멀미가 심해요")이 조용히 초기화됐다 — 확인 플래그는 이미 true라 다시
+        // 물어보지도 않은 채로.
+        TagoClient noRouteTagoClient = new TagoClient(null) {
+            @Override public String findTerminalId(String terminalName) { return terminalName; }
+
+            @Override public List<BusSchedule> searchBuses(String depId, String arrId, String date) {
+                return List.of();
+            }
+        };
+        ConversationParseService serviceWithNoRoute = new ConversationParseService(
+                null, new ConversationRuleExtractor(), new BusSearchService(noRouteTagoClient));
+
+        ConversationSession session = new ConversationSession("s1");
+        // 출발/도착은 아직 모르지만, 인원/좌석선호/접근성은 이미 확정된 상태를 흉내낸다.
+        session.mergeConditions(null, null, null, null, "ANY", "ANY", "ANY",
+                2, true, List.of("WINDOW"), true, List.of("MOTION_SICKNESS"), null);
+
+        ConversationParseResponse r = serviceWithNoRoute.parse(
+                new ConversationParseRequest("서울경부에서 포항으로 가는 버스", "s1"), session);
+
+        assertThat(r.routeNotFound()).isTrue();
+        assertThat(r.passengers()).isEqualTo(2);
+        assertThat(r.seatPreferences()).contains("WINDOW");
+        assertThat(r.accessibilityNeeds()).contains("MOTION_SICKNESS");
+    }
+
+    @Test
     void rechecks_the_route_once_an_ambiguous_city_is_narrowed_to_the_specific_terminal_with_no_service() {
         // 실제로 보고된 사고: "서울"이라고만 하면 그 도시 터미널 중 하나(예: 센트럴시티)라도 노선이
         // 있어 통과되고 "서울경부/센트럴시티/동서울 중 어디로?"를 물어봤는데, 정작 사용자가 고른
@@ -122,6 +154,10 @@ class ConversationParseServiceTest {
         assertThat(turn2.departure()).isEqualTo("서울");
         assertThat(turn2.arrival()).isEqualTo("전주고속");
         assertThat(turn2.clarificationPrompt()).contains("서울경부").contains("전주고속").contains("서울의 다른 터미널");
+        // 실제로 보고된 사고: "OO의 다른 터미널로 다시 말씀해 주세요"처럼 실제 터미널명을 나열하지
+        // 않으면, 사용자도 뭐라고 답해야 할지 막막하고 다음 턴 LLM의 STT 오인식 교정도 참고할
+        // 단서가 없어 엉뚱한 지명으로 틀리곤 했다. 후보 터미널명을 직접 나열해야 한다.
+        assertThat(turn2.clarificationPrompt()).contains("센트럴시티").contains("동서울");
     }
 
     @Test
@@ -561,6 +597,33 @@ class ConversationParseServiceTest {
         }
     }
 
+    // 실제로 보고된 사고: "요"처럼 조각난 입력을 교정할 자신이 없자, LLM이 원문 대신 자기 설명
+    // 문구를 correctedText에 담아 돌려줬다. 이걸 그대로 믿으면 사용자가 하지도 않은 말이 화면
+    // 말풍선에 뜬다.
+    private static class RefusingWatsonxClient extends WatsonxClient {
+        RefusingWatsonxClient() { super(null); }
+        @Override public boolean isConfigured() { return true; }
+        @Override public String ask(String prompt) {
+            return """
+                {"intent":"BUS_SEARCH","departure":null,"arrival":null,"date":null,
+                 "departureTime":null,"timePreference":"ANY","servicePreference":"ANY",
+                 "busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[],
+                 "correctedText":"사용자 발화를 이해하지 못함"}
+                """;
+        }
+    }
+
+    @Test
+    void ignores_a_self_explanatory_correction_that_is_not_an_actual_correction() {
+        ConversationParseService serviceWithRefusal = new ConversationParseService(
+                new RefusingWatsonxClient(), new ConversationRuleExtractor(), alwaysHasRouteService());
+
+        ConversationParseResponse r = serviceWithRefusal.parse(
+                new ConversationParseRequest("요", "s1"), new ConversationSession("s1"));
+
+        assertThat(r.correctedText()).isNull();
+    }
+
     @Test
     void re_extracts_with_rules_using_the_llm_corrected_text_when_stt_mangles_a_keyword() {
         // 실제로 보고된 사고: STT가 "창가 쪽"을 "참가죽"처럼 잘못 받아써서, 룰베이스가 원문 그대로는
@@ -577,6 +640,18 @@ class ConversationParseServiceTest {
                 new ConversationParseRequest("참가죽으로 주세요", "s1"), session);
 
         assertThat(r.seatPreferences()).contains("WINDOW");
+        // 실제로 보고된 사고: 교정이 실제로 반영됐는데도 응답의 correctedText가 항상 null로
+        // 하드코딩돼 있어서, 프론트가 사용자 말풍선을 교정된 텍스트로 갱신할 방법이 없었다.
+        assertThat(r.correctedText()).isEqualTo("창가 쪽으로 주세요");
+    }
+
+    @Test
+    void leaves_corrected_text_null_when_the_llm_does_not_change_anything() {
+        // 교정이 없었다면(원문 그대로) 프론트가 말풍선을 괜히 다시 그리지 않도록 null이어야 한다.
+        ConversationParseResponse r = service.parse(
+                new ConversationParseRequest("서울경부에서 포항으로 가는 버스", "s1"), new ConversationSession("s1"));
+
+        assertThat(r.correctedText()).isNull();
     }
 
     // "두 장"이 "두잠"으로 STT 오인식된 상황. LLM 자신의 passengers 필드는 일부러 1(틀린 값)로

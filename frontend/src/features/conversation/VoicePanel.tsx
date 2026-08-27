@@ -10,6 +10,11 @@ import './ConversationPanel.css'
 let currentAudio: HTMLAudioElement | null = null
 let currentTtsController: AbortController | null = null
 
+// 64kbps 오디오 기준 약 0.4초 미만의 녹음은 사실상 즉시 눌렀다 뗀 것으로 본다 — 이 정도로 짧으면
+// 오디오 컨테이너가 제대로 안 만들어져서 IBM STT가 "unable to transcode" 400으로 거부한다(실제로
+// 보고된 사고). 그 요청 자체를 보내지 않는다.
+const MIN_RECORDING_BYTES = 3_000
+
 export function stopSpeaking() {
   currentTtsController?.abort()
   currentTtsController = null
@@ -48,6 +53,13 @@ export function VoicePanel({ onUserSpeak, loading, compact = false }: VoicePanel
       setError(null)
       try {
         const audio = await stopRecording()
+        // 실제로 보고된 사고: 마이크를 아주 짧게(거의 즉시) 눌렀다 떼면 오디오 컨테이너가 제대로
+        // 안 만들어져서, IBM STT가 "unable to transcode" 400 오류로 거부해 버린다. 그 요청 자체를
+        // 보내지 않고, 무음일 때와 같은 안내로 다시 말해 달라고 한다.
+        if (audio.size < MIN_RECORDING_BYTES) {
+          setError('너무 짧게 녹음됐어요. 다시 한 번 말씀해 주세요.')
+          return
+        }
         const data = await speechToText(audio)
         if (data.transcript) {
           await onUserSpeak(data.transcript)

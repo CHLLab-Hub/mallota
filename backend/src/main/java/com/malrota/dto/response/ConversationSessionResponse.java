@@ -42,15 +42,20 @@ public class ConversationSessionResponse {
     // 출발지-도착지 사이에 직행 노선 자체가 없다는 1회성 신호. 프론트는 이걸 받으면 세션을
     // 초기화해서 출발지/도착지부터 다시 물어봐야 한다 — 세션에 남겨두면 같은 노선을 계속 물게 된다.
     private boolean routeNotFound;
+    // LLM이 STT 오인식을 문맥으로 교정한 원문(예: "이런 트렌치" -> "이런 센트럴시티"). 세션에
+    // 남기지 않는 1회성 신호다 — 프론트가 방금 사용자가 말한 것으로 표시한 채팅 말풍선을 이
+    // 값으로 갱신해서, 실제로 이해한 내용과 화면에 보이는 말풍선이 다르게 보이지 않게 한다.
+    private String correctedText;
 
     /** 엔티티 ➔ DTO 변환 */
     public static ConversationSessionResponse from(ConversationSession session) {
-        return from(session, false, false, false);
+        return from(session, false, false, false, null);
     }
 
     /** 엔티티 ➔ DTO 변환 (이번 턴의 1회성 신호 포함) */
     public static ConversationSessionResponse from(ConversationSession session, boolean wantsEarlierBus,
-                                                    boolean wantsLaterBus, boolean routeNotFound) {
+                                                    boolean wantsLaterBus, boolean routeNotFound,
+                                                    String correctedText) {
         return ConversationSessionResponse.builder()
                 .sessionId(session.getSessionId())
                 .state(session.getState())
@@ -71,6 +76,7 @@ public class ConversationSessionResponse {
                 .wantsEarlierBus(wantsEarlierBus)
                 .wantsLaterBus(wantsLaterBus)
                 .routeNotFound(routeNotFound)
+                .correctedText(correctedText)
                 .build();
     }
 }

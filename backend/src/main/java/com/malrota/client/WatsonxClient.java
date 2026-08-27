@@ -2,10 +2,13 @@ package com.malrota.client;
 
 import com.ibm.watsonx.ai.chat.ChatService;
 import com.ibm.watsonx.ai.chat.model.AssistantMessage;
+import com.ibm.watsonx.ai.chat.model.ChatParameters;
+import com.ibm.watsonx.ai.chat.model.UserMessage;
 import com.malrota.config.WatsonxProperties;
 import org.springframework.stereotype.Component;
 
 import java.time.Duration;
+import java.util.List;
 
 @Component
 public class WatsonxClient {
@@ -37,10 +40,18 @@ public class WatsonxClient {
         return chatService;
     }
 
+    // STT 오인식 교정/조건 추출은 "그럴듯하게 창작"하면 안 되고 최대한 결정적이어야 한다 — 실제로
+    // 보고된 사고: 기본 temperature로는 "경부"를 "경기"/"경주"/"명일"처럼 실제 존재하는 다른
+    // 지명으로 "창의적으로" 잘못 교정하는 경우가 있었다. temperature를 0으로 낮춰 매번 가장
+    // 확률 높은(=보수적인) 답을 고르게 한다.
+    private static final ChatParameters DETERMINISTIC_PARAMETERS = ChatParameters.builder()
+            .temperature(0.0)
+            .build();
+
     /** 메인 질의 메서드 */
     public String ask(String prompt) {
         AssistantMessage response = chatService()
-                .chat(prompt)
+                .chat(List.of(UserMessage.text(prompt)), DETERMINISTIC_PARAMETERS)
                 .toAssistantMessage();
         return response.content();
     }

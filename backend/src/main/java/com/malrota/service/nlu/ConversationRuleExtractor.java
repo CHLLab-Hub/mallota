@@ -4,7 +4,6 @@ import com.malrota.client.TagoClient;
 import com.malrota.util.KoreanVowelFold;
 import org.springframework.stereotype.Component;
 
-import java.time.DayOfWeek;
 import java.time.LocalDate;
 import java.time.LocalDateTime;
 import java.time.LocalTime;
@@ -33,7 +32,7 @@ public class ConversationRuleExtractor {
     private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(?:출발(?:지)?[:\\s]*)?(" + TERMINALS + ")\\s*(?:에서|서|발)");
     // "으로"/"로" 조사는 받침 유무에 따라 형태가 다르다("천안고속으로", "동대구로") — "로"만 인정하면
     // 받침 있는 터미널명(예: "-고속"으로 끝나는 이름들) 뒤에 "으로"가 붙었을 때 매칭이 실패한다.
-    private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)|갈(?:려고|려는)?|도착))");
+    private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)|갈(?:려고|려는)?|도착|부탁))");
     // "서울에서 대전으로 가요"처럼 한 문장에 출발지와 도착지가 함께 있을 때는 각각 따로 잡는 것보다
     // 이 문장 구조를 우선한다. 두 도시가 같은 값으로 덮이는 사고를 막는다.
     private static final Pattern ROUTE_PATTERN = Pattern.compile(
@@ -59,8 +58,12 @@ public class ConversationRuleExtractor {
     // 보고된 사고: "친구가 다리를 다쳤어"에서 "친구가"의 "가"가 주격 조사일 뿐인데 어미 없는 맨 "가"도
     // 매칭돼 버려서 "친구"가 도착지로 오인됐다. "명사+가"(주격 조사)는 극히 흔한 문형이라, "가다"
     // 동사 어미로 확실히 해석되는 경우(요/는/자/고/려고/는데가 뒤따르는 경우)만 인정한다.
+    //
+    // "부탁": 실제로 보고된 사고: "서울경부로 부탁해요"처럼 "가다" 동사 없이 "-로 부탁해요"라고만
+    // 말하면 도착지 어미로 전혀 인식되지 않았다. "가다"/"도착"과 대등한, 목적지를 말하는 흔한
+    // 종결 표현이라 함께 인정한다.
     private static final Pattern GENERIC_ARR_PATTERN = Pattern.compile(
-            "([가-힣]{2,}?)\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)|갈(?:려고|려는)?|도착))(?![가-힣])");
+            "([가-힣]{2,}?)\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)|갈(?:려고|려는)?|도착|부탁))(?![가-힣])");
 
     // "혼자서"처럼 출발 문형("-서")과 우연히 겹치는 흔한 비지명 단어. GENERIC_DEP_PATTERN이 이런
     // 단어를 출발지 후보로 잡아버리면 "혼자서 서울 갈려고"에서 "혼자"가, "여기서 대전 가는 버스
@@ -104,6 +107,16 @@ public class ConversationRuleExtractor {
      */
     public RuleParse extract(String text, LocalDateTime baseDateTime, String knownTimePreference) {
         String input = text == null ? "" : text.trim();
+        // 실제로 보고된 사고: "서울 경부로 부탁해요"처럼 터미널명 음절 사이에 공백이 잘못 끼어들면
+        // (STT든 LLM 교정이든) DEPARTURE_PATTERN/ARRIVAL_PATTERN이 "서울경부"와 정확히 일치하는
+        // 연속된 문자열을 요구하기 때문에 아예 매칭되지 않았다. 등록된 터미널명이 공백만 끼운 채로
+        // 나타나면 그 부분만 공백을 제거해, 문장의 나머지 구조(단어 사이 정상 공백)는 그대로 둔다.
+        input = collapseSpacesInsideTerminalNames(input);
+        // 이 앱 도메인에서 거의 항상 STT 오인식인 흔한 단어는 애초에 텍스트 자체를 교정해 둔다 —
+        // 의미만 속으로 해석하고 화면 표시(사용자 말풍선)는 원문 그대로 두면, 실제로는 "내일"로
+        // 이해했으면서 사용자에게는 "매일"이라고 말한 것처럼 보여 혼란스럽다. 텍스트 자체를 고치면
+        // 이후 모든 로직(날짜/서비스 선호 판단 포함)과 화면 표시가 자연히 같은 값을 쓰게 된다.
+        input = input.replace("매일", "내일").replace("초청", "첫차");
 
         // 발화 전체가 등록된 터미널명/별칭 그 자체와 완전히 일치하는 경우("부산서부" 등 반문에 대한 단답)를 최우선으로 식별한다.
         // 완전 일치를 먼저 확인해 이 오인식을 원천 차단하고, 방향 배정은 세션 문맥을 아는 ConversationParseService에 맡긴다.
@@ -185,6 +198,12 @@ public class ConversationRuleExtractor {
         if (rejectedTerminal != null) {
             rejectedTerminal = canonicalizeTerminal(rejectedTerminal);
         }
+        // 실제로 보고된 사고: "대전청사 말고 대전터미널로 부탁해"에서 "대전터미널로 부탁"이 정정
+        // 문구(correctionTerminal)이자 동시에 일반 ARRIVAL_PATTERN(부탁 어미)에도 걸려서, 같은
+        // 지명이 "정정 대상"과 "새로 언급된 도착지" 양쪽으로 중복 인식돼 충돌했다. correctionTerminal과
+        // 같은 지명이면 일반 도착/출발 슬롯에서는 제거해, 정정 로직에만 온전히 맡긴다.
+        if (correctionTerminal != null && correctionTerminal.equals(arrival)) arrival = null;
+        if (correctionTerminal != null && correctionTerminal.equals(departure)) departure = null;
 
         // 실제 보고된 사례: "저녁 일곱시 말고 첫차로 부탁해"처럼 날짜/시간/승차 방식을 정정하는
         // 문장에서, 거부된 옛 값("저녁 일곱시")이 "말고" 뒤의 새 값("첫차")과 함께 그대로 다시
@@ -203,6 +222,9 @@ public class ConversationRuleExtractor {
         // "8시", "12시", "한 시"처럼 오전/오후가 없으면 같은 시각이 두 개 존재한다.
         // 예매 시간은 추측하지 않고 반드시 되묻게 한다.
         boolean ambiguousMeridiem = hasAmbiguousMeridiem(textForTimeExtraction) && resolution.departureTime() == null;
+        // "이번 주말"/"주말"은 토요일/일요일 중 어느 쪽인지 알 수 없다. 날짜가 이미 다른 표현
+        // (요일 명시, "내일" 등)으로 확정됐다면 애매하지 않다.
+        boolean ambiguousWeekend = hasAmbiguousWeekend(textForTimeExtraction) && resolution.date() == null;
 
         return new RuleParse(
                 input.contains("취소") ? "CANCEL" : (input.contains("문의") || input.contains("얼마") ? "INQUIRY" : "BUS_SEARCH"),
@@ -225,6 +247,7 @@ public class ConversationRuleExtractor {
                 wantsEarlierBus(input),
                 wantsLaterBus(input),
                 ambiguousMeridiem,
+                ambiguousWeekend,
                 unrecognizedDeparture,
                 unrecognizedArrival
         );
@@ -247,6 +270,32 @@ public class ConversationRuleExtractor {
     private boolean wantsLaterBus(String text) {
         return List.of("더 늦은", "더늦은", "더 나중", "더나중", "조금 더 늦게", "좀 더 늦게", "미뤄서", "더 미뤄", "뒤로 미뤄")
                 .stream().anyMatch(text::contains);
+    }
+
+    /**
+     * 등록된 터미널명/별칭이 음절 사이에 공백만 끼운 채로 나타나면(예: "서울 경부") 그 부분의
+     * 공백만 제거해 "서울경부"로 되돌린다. 문장의 다른 부분(단어 사이 정상 공백)은 건드리지 않는다
+     * — 이름 전체를 문자 단위로 공백 허용 정규식으로 바꿔서 찾아내므로, 실제로 그 이름이 공백과
+     * 함께 나타난 경우만 정확히 잡아낸다.
+     */
+    private static String collapseSpacesInsideTerminalNames(String text) {
+        if (text == null || text.isBlank()) return text;
+        String compact = text.replaceAll("\\s+", "");
+        String result = text;
+        for (String name : TagoClient.allNamesAndAliases()) {
+            if (name.length() < 2 || !compact.contains(name)) continue;
+            StringBuilder spaced = new StringBuilder();
+            for (int i = 0; i < name.length(); i++) {
+                if (i > 0) spaced.append("\\s*");
+                spaced.append(Pattern.quote(String.valueOf(name.charAt(i))));
+            }
+            // 실제로 보고된 사고: "천안에서 부산가는"에서 "에[서] 부산"이 "서부산"(부산서부의 별칭)과
+            // 우연히 겹쳐서, 단어 경계를 넘어 "에서"의 "서"와 "부산"을 하나로 붙여버렸다. 매칭 시작
+            // 지점 바로 앞이 한글이면(=이미 다른 단어 중간이면) 그 단어의 일부일 뿐 진짜 터미널명의
+            // 시작이 아니므로 제외한다 — 실제 터미널명은 항상 공백/문장 시작 직후에 나온다.
+            result = result.replaceAll("(?<![가-힣])" + spaced, name);
+        }
+        return result;
     }
 
     /**
@@ -369,6 +418,14 @@ public class ConversationRuleExtractor {
         return false;
     }
 
+    /**
+     * "주말"이 토요일/일요일 중 어느 쪽인지 명시 없이 언급됐는지. 실제로 보고된 사고: "이번 주말
+     * 오후"를 임의로 토요일로 조용히 확정해버려서 사용자가 일요일을 의도했어도 확인 없이 넘어갔다.
+     */
+    private boolean hasAmbiguousWeekend(String text) {
+        return text.contains("주말") && !text.contains("토요일") && !text.contains("일요일");
+    }
+
     private LocalDate resolveWeekdayOrRelativeDay(String text, LocalDateTime base, LocalDate current) {
         LocalDate baseDate = base.toLocalDate();
         // 실제 보고된 사례: 음성 인식이 "모레"를 "모래"로 받아쓴다 (ㅔ/ㅐ 혼동). "내일"의 "내"도
@@ -379,9 +436,9 @@ public class ConversationRuleExtractor {
         if (KoreanVowelFold.contains(text, "내일")) return baseDate.plusDays(1);
         if (text.contains("오늘")) return baseDate;
 
-        if (text.contains("이번 주말") || text.contains("이번주말")) {
-            return baseDate.plusDays(Math.max(0, DayOfWeek.SATURDAY.getValue() - baseDate.getDayOfWeek().getValue()));
-        }
+        // "이번 주말"은 토요일과 일요일 중 어느 쪽인지 알 수 없어 여기서 날짜를 확정하지 않는다
+        // (hasAmbiguousWeekend가 이 경우를 감지해 되묻게 한다) — "이번 주말 토요일"처럼 요일까지
+        // 함께 말하면 아래 WEEKDAY_PATTERN이 그 요일을 그대로 잡아낸다.
 
         Matcher thisWeekday = THIS_WEEKDAY_PATTERN.matcher(text);
         if (thisWeekday.find()) return baseDate.plusDays(weekday(thisWeekday.group(1)) - baseDate.getDayOfWeek().getValue());
@@ -527,9 +584,11 @@ public class ConversationRuleExtractor {
     }
 
     private String servicePreference(String text) {
-        // "저차", "쳐차"는 음성 인식이 "첫차"를 잘못 받아적은 흔한 오인식 표기다 (실제 사용자 보고 사례).
-        // "첫차"/"막차"는 STT가 "첫 차"/"막 차"처럼 중간에 공백을 잘못 끼워 넣는 경우가 있어,
-        // 공백을 제거한 텍스트로 비교한다 ("젤 빠른"은 원래 띄어 쓰는 두 단어라 그대로 둔다).
+        // "저차", "쳐차"는 음성 인식이 "첫차"를 잘못 받아적은 흔한 오인식 표기다 (실제 사용자 보고
+        // 사례). "초청"도 같은 부류지만 extract() 시작부에서 이미 "첫차"로 텍스트 자체를 교정해
+        // 두므로 여기까지 오지 않는다. "첫차"/"막차"는 STT가 "첫 차"/"막 차"처럼 중간에 공백을
+        // 잘못 끼워 넣는 경우가 있어, 공백을 제거한 텍스트로 비교한다 ("젤 빠른"은 원래 띄어 쓰는
+        // 두 단어라 그대로 둔다).
         String compact = text.replaceAll("\\s+", "");
         if (List.of("첫차", "저차", "쳐차", "시방", "싸게싸게", "일찍이").stream().anyMatch(compact::contains)
                 || List.of("젤 빠른", "가장 빠른", "제일 빠른").stream().anyMatch(text::contains)) {
@@ -658,6 +717,11 @@ public class ConversationRuleExtractor {
         boolean wantsEarlierBus,
         boolean wantsLaterBus,
         boolean ambiguousMeridiem,
+        // "이번 주말"/"주말"은 토요일과 일요일 둘 다 가리킬 수 있어 애매하다 — 실제로 보고된 사고:
+        // "이번 주말 오후"를 임의로 토요일로 조용히 확정해버려서, 사용자가 일요일을 의도했어도
+        // 확인 없이 넘어갔다. 오전/오후가 모호한 시각(ambiguousMeridiem)과 같은 방식으로, 요일을
+        // 추측하지 않고 반드시 되묻는다.
+        boolean ambiguousWeekend,
         // 등록되지 않은 지명을 "-에서"/"-(으)로 가는" 문형으로 말했을 때의 원문 그대로 (지원하지
         // 않는 지역이라고 정직하게 안내하기 위한 용도 — departure/arrival과 달리 등록 여부와
         // 무관하게 항상 채워진다는 보장이 없는 1회성 신호다).

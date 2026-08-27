@@ -58,12 +58,13 @@ public class ConversationController {
         }
 
         sessionService.refreshAfterParse(session);
-        // wantsEarlierBus/wantsLaterBus/routeNotFound는 세션에 저장하지 않는 1회성 신호라 이번
-        // 응답에만 실어 보낸다.
+        // wantsEarlierBus/wantsLaterBus/routeNotFound/correctedText는 세션에 저장하지 않는 1회성
+        // 신호라 이번 응답에만 실어 보낸다.
         boolean wantsEarlierBus = parsed != null && parsed.wantsEarlierBus();
         boolean wantsLaterBus = parsed != null && parsed.wantsLaterBus();
         boolean routeNotFound = parsed != null && parsed.routeNotFound();
-        return ConversationSessionResponse.from(session, wantsEarlierBus, wantsLaterBus, routeNotFound);
+        String correctedText = parsed != null ? parsed.correctedText() : null;
+        return ConversationSessionResponse.from(session, wantsEarlierBus, wantsLaterBus, routeNotFound, correctedText);
     }
 
     /**
