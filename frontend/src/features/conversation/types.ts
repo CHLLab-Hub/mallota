@@ -32,7 +32,7 @@ export interface BusSchedule {
 export interface BusRecommendation {
   bus: BusSchedule
   reason: string
-  label: string
+  labels: string[]
 }
 
 // 백엔드 PostgreSQL에 저장되는 예매 내역 형식

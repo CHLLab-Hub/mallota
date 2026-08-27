@@ -56,7 +56,7 @@ class BusSearchServiceTest {
         var result = service.recommend(new BusSearchRequest("서울", "대전", "2026-08-25", "21:00", "NIGHT", "ANY", "ANY"));
 
         assertThat(result).extracting(r -> r.bus().routeId()).doesNotContain("VERY_CHEAP_BUT_FAR", "TOO_LATE");
-        assertThat(result).filteredOn(r -> r.label().equals("최저가"))
+        assertThat(result).filteredOn(r -> r.labels().contains("최저가"))
                 .extracting(r -> r.bus().routeId()).containsExactly("CHEAP_WITHIN_WINDOW");
     }
 
@@ -93,10 +93,10 @@ class BusSearchServiceTest {
         List<BusRecommendation> recs = service.recommend(new BusSearchRequest(
                 "서울", "대전", "2026-08-25", "09:00", "ANY", "ANY", "ANY"));
 
-        BusRecommendation cheapest = recs.stream().filter(r -> r.label().equals("최저가")).findFirst().orElseThrow();
+        BusRecommendation cheapest = recs.stream().filter(r -> r.labels().contains("최저가")).findFirst().orElseThrow();
         assertThat(cheapest.bus().departureTime()).isEqualTo("202608250930");
         // R03(새벽 5,000원)은 훨씬 싸지만 요청 시각과 너무 동떨어져 있어 "최저가"로는 추천되지 않는다.
-        assertThat(recs).noneMatch(r -> r.label().equals("최저가") && r.bus().departureTime().equals("202608252300"));
+        assertThat(recs).noneMatch(r -> r.labels().contains("최저가") && r.bus().departureTime().equals("202608252300"));
     }
 
     @Test
@@ -129,11 +129,11 @@ class BusSearchServiceTest {
     }
 
     @Test
-    void other_time_card_widens_from_thirty_minutes_to_one_hour_when_nothing_closer_exists() {
+    void closest_time_card_widens_from_thirty_minutes_to_one_hour_when_nothing_closer_exists() {
         // "최저가랑 조건에 맞는 가장 가까운 시간 +-30분으로, 없으면 1시간까지"라는 요청에 따라,
-        // 30분 이내에 "최저가"와 구분되는 다른 후보가 없으면 1시간까지 범위를 넓혀서 "추천 시간"을
+        // 30분 이내에 "최저가"와 구분되는 다른 후보가 없으면 1시간까지 범위를 넓혀서 "가까운 시간"을
         // 찾아야 한다. ONLY_WITHIN_30(요청 시각과 정확히 일치)은 유일한 30분 이내 후보라 "최저가"로
-        // 소진되고, WITHIN_HOUR(45분 후)가 그다음으로 넓은 범위에서 "추천 시간"으로 나와야 한다.
+        // 소진되고, WITHIN_HOUR(45분 후)가 그다음으로 넓은 범위에서 "가까운 시간"으로 나와야 한다.
         TagoClient client = new TagoClient(null) {
             @Override public String findTerminalId(String terminalName) { return terminalName; }
 
@@ -149,16 +149,17 @@ class BusSearchServiceTest {
         List<BusRecommendation> recs = service.recommend(new BusSearchRequest(
                 "서울", "대전", "2026-08-25", "09:00", "ANY", "ANY", "ANY"));
 
-        assertThat(recs).filteredOn(r -> r.label().equals("최저가"))
+        assertThat(recs).filteredOn(r -> r.labels().contains("최저가"))
                 .extracting(r -> r.bus().routeId()).containsExactly("ONLY_WITHIN_30");
-        assertThat(recs).filteredOn(r -> r.label().equals("추천 시간"))
+        assertThat(recs).filteredOn(r -> r.labels().contains("가까운 시간"))
                 .extracting(r -> r.bus().routeId()).containsExactly("WITHIN_HOUR");
     }
 
     @Test
-    void other_time_card_is_omitted_when_nothing_exists_within_one_hour() {
-        // TOO_FAR는 요청 시각보다 90분 이르다 — search() 단계의 2시간 이내 허용 범위는 통과하지만,
-        // "추천 시간" 카드의 1시간 확장 범위보다는 멀어서 억지로 끼워 넣으면 안 된다.
+    void closest_time_card_duplicates_the_cheapest_bus_when_nothing_else_exists_within_one_hour() {
+        // "가장 가까운 시간"/"최저가" 두 카테고리는 항상 둘 다 떠야 한다 — 중복돼도 괜찮다. TOO_FAR는
+        // 요청 시각보다 90분 이르다(1시간 확장 범위 밖)라서, 이 노선엔 진짜로 다른 버스가 없다.
+        // 이 경우 카드를 생략하는 대신 최저가와 같은 버스를 "가까운 시간"에도 중복으로 보여준다.
         TagoClient client = new TagoClient(null) {
             @Override public String findTerminalId(String terminalName) { return terminalName; }
 
@@ -174,11 +175,15 @@ class BusSearchServiceTest {
         List<BusRecommendation> recs = service.recommend(new BusSearchRequest(
                 "서울", "대전", "2026-08-25", "09:00", "ANY", "ANY", "ANY"));
 
-        assertThat(recs).noneMatch(r -> r.label().equals("추천 시간"));
+        // 두 카테고리가 결국 같은 버스로 겹치므로, 카드를 둘로 쪼개지 않고 뱃지 2개를 붙인
+        // 카드 하나로 합쳐서 보여준다.
+        assertThat(recs).hasSize(1);
+        assertThat(recs.get(0).bus().routeId()).isEqualTo("ONLY_WITHIN_30");
+        assertThat(recs.get(0).labels()).containsExactlyInAnyOrder("최저가", "가까운 시간");
     }
 
     @Test
-    void other_time_card_prefers_a_slightly_later_bus_over_an_equally_close_earlier_one() {
+    void closest_time_card_prefers_a_slightly_later_bus_over_an_equally_close_earlier_one() {
         // "+30분에 가중치를 조금 더 줘"라는 요청: 요청 시각으로부터 같은 거리(20분)만큼 떨어진
         // 이른 버스와 늦은 버스 중에서는, 늦게 출발하는 쪽을 더 선호해야 한다.
         TagoClient client = new TagoClient(null) {
@@ -197,16 +202,15 @@ class BusSearchServiceTest {
         List<BusRecommendation> recs = service.recommend(new BusSearchRequest(
                 "서울", "대전", "2026-08-25", "09:00", "ANY", "ANY", "ANY"));
 
-        assertThat(recs).filteredOn(r -> r.label().equals("추천 시간"))
+        assertThat(recs).filteredOn(r -> r.labels().contains("가까운 시간"))
                 .extracting(r -> r.bus().routeId()).containsExactly("LATER");
     }
 
     @Test
-    void first_card_is_labeled_as_closest_time_not_cheapest_when_both_cards_cost_the_same() {
-        // 실제로 보고된 사고: "최저가"와 "추천 시간" 두 카드의 가격이 똑같은데도(같은 노선/등급)
-        // 첫 번째 카드가 "최저가"라고 표시돼, 실제로는 없는 가격 차이가 있는 것처럼 보였다.
-        // 30분 이내에 후보가 하나뿐이라 그게 "최저가"로 뽑힌 것뿐이므로, 가격이 같으면
-        // "가까운 시간"이라고 정직하게 표시해야 한다.
+    void always_shows_both_categories_even_when_both_cards_cost_the_same() {
+        // 실제로 보고된 사고: "최저가"와 "가까운 시간" 두 카드의 가격이 똑같으니까(같은 노선/등급)
+        // 둘 중 하나의 라벨이 통째로 사라지거나 다른 이름으로 바뀌었다. 가격이 같아도 두 카테고리는
+        // 각자 정직한 이름 그대로, 항상 둘 다 떠야 한다 — 서로 다른 버스라면 카드도 둘이어야 한다.
         TagoClient client = new TagoClient(null) {
             @Override public String findTerminalId(String terminalName) { return terminalName; }
 
@@ -222,7 +226,10 @@ class BusSearchServiceTest {
         List<BusRecommendation> recs = service.recommend(new BusSearchRequest(
                 "서울", "대전", "2026-08-25", "20:00", "ANY", "ANY", "ANY"));
 
-        assertThat(recs).extracting(BusRecommendation::label).containsExactly("가까운 시간", "추천 시간");
-        assertThat(recs).noneMatch(r -> r.label().equals("최저가"));
+        assertThat(recs).hasSize(2);
+        assertThat(recs).filteredOn(r -> r.labels().contains("최저가"))
+                .extracting(r -> r.bus().routeId()).containsExactly("CLOSE");
+        assertThat(recs).filteredOn(r -> r.labels().contains("가까운 시간"))
+                .extracting(r -> r.bus().routeId()).containsExactly("FAR");
     }
 }

@@ -17,7 +17,7 @@ public class BusSearchService {
     /** 요청 시각보다 이른 버스는 최대 2시간 전, 늦은 버스는 최대 30분 후까지만 추천한다. */
     private static final int MAX_EARLY_MINUTES = 120;
     private static final int MAX_LATE_MINUTES = 30;
-    /** 추천 카드(최저가/추천 시간)는 먼저 30분 이내에서 후보를 찾고, 없으면 1시간까지 범위를 넓힌다. */
+    /** 추천 카드(최저가/가까운 시간)는 먼저 30분 이내에서 후보를 찾고, 없으면 1시간까지 범위를 넓힌다. */
     private static final int OTHER_TIME_PRIMARY_MINUTES = 30;
     private static final int OTHER_TIME_FALLBACK_MINUTES = 60;
     /** 이르게 출발하는 버스에 주는 소폭의 페널티(분) — 같은 거리면 늦게 출발하는 쪽을 더 선호한다. */
@@ -91,9 +91,10 @@ public class BusSearchService {
     }
 
     /**
-     * 버스 2개 추천 (가장 저렴 / 근처 시각). 두 카드 모두 같은 기준으로 요청 시각 ±30분 이내에서
-     * 먼저 후보를 찾고, 없으면 ±1시간까지 범위를 넓힌다 — 그래도 없으면 억지로 먼 시간대를
-     * 끼워 넣지 않고 추천을 생략한다.
+     * 버스 2개 추천 (최저가 / 가장 가까운 시간). 이 두 카테고리는 항상 둘 다 보여준다. 같은 버스가
+     * 두 조건 모두에 해당하면(예: 등급이 고정 요금이라 가격이 다 같을 때) 카드를 둘로 쪼개지 않고
+     * 뱃지 2개를 붙인 카드 하나로 합쳐서 보여준다 — "가격 차이가 없는데 최저가라고 하면 거짓말"
+     * 이라는 이유로 카드를 생략하거나 라벨을 바꿔치기하지 않는다. 두 카테고리 이름은 항상 고정이다.
      */
     public List<BusRecommendation> recommend(BusSearchRequest request) {
         List<BusSchedule> gradeFiltered = gradeFilteredSchedules(request);
@@ -103,26 +104,13 @@ public class BusSearchService {
         BusSearchRequest effective = withEffectiveDepartureTime(gradeFiltered, request);
 
         if (!hasText(effective.departureTime())) {
-            // 비교할 기준 시각이 없는 완전 자유 조건: 등급/시간대만 반영해 정렬된 순서로 추천한다.
+            // 비교할 기준 시각이 없는 완전 자유 조건: 등급/시간대만 반영해 정렬된 순서에서
+            // 맨 앞을 "가장 가까운 시간"으로 삼는다.
             List<BusSchedule> sorted = gradeFiltered.stream().sorted(scheduleComparator(effective)).toList();
             if (sorted.isEmpty()) return result;
             BusSchedule cheapest = sorted.stream().min(Comparator.comparingInt(BusSchedule::charge)).orElse(null);
-            BusSchedule other = null;
-            for (BusSchedule s : sorted) {
-                if (cheapest == null || !isSameBus(s, cheapest)) {
-                    other = s;
-                    break;
-                }
-            }
-            if (cheapest != null) {
-                boolean tiedPrice = other != null && other.charge() == cheapest.charge();
-                result.add(new BusRecommendation(cheapest,
-                        tiedPrice ? "요청하신 조건과 가장 가까운 버스입니다." : "가장 저렴한 버스입니다.",
-                        tiedPrice ? "가까운 시간" : "최저가"));
-            }
-            if (other != null) {
-                result.add(new BusRecommendation(other, "비슷한 시간대의 추천 버스입니다.", "추천 시간"));
-            }
+            BusSchedule closest = sorted.get(0);
+            addCheapestAndClosest(result, cheapest, closest);
             return result;
         }
 
@@ -137,35 +125,50 @@ public class BusSearchService {
 
         BusSchedule cheapest = cheapestPool.stream().min(Comparator.comparingInt(BusSchedule::charge)).orElse(null);
 
-        // "추천 시간": 최저가와 다른, 요청 시각에 가장 가까운 버스. 30분 이내에서 먼저 찾고,
-        // (최저가가 그 안의 유일한 후보였던 경우 등) 없으면 1시간까지 범위를 넓힌다. 이르게
-        // 출발하는 쪽보다 늦게 출발하는 쪽을 살짝 더 선호한다(같은 거리면 조금 늦게 타는 걸 더
-        // 편하게 여기는 경우가 많다).
-        BusSchedule other = primaryPool.stream()
+        // "가까운 시간": 최저가와 다른 버스를 30분 이내에서 먼저 찾고, (최저가가 그 안의 유일한
+        // 후보였던 경우 등) 없으면 1시간까지 범위를 넓힌다. 이르게 출발하는 쪽보다 늦게 출발하는
+        // 쪽을 살짝 더 선호한다. 그래도 다른 버스가 전혀 없으면 최저가와 같은 버스로 합쳐서
+        // 보여준다 — 두 카테고리("최저가"/"가까운 시간")는 항상 둘 다 존재해야 한다.
+        BusSchedule closest = primaryPool.stream()
                 .filter(s -> cheapest == null || !isSameBus(s, cheapest))
                 .min(Comparator.comparingInt(s -> weightedDistance(departureTime(s), requestedTime)))
                 .orElse(null);
-        if (other == null) {
-            other = withinMinutes(gradeFiltered, requestedTime, OTHER_TIME_FALLBACK_MINUTES).stream()
+        if (closest == null) {
+            closest = withinMinutes(gradeFiltered, requestedTime, OTHER_TIME_FALLBACK_MINUTES).stream()
                     .filter(s -> cheapest == null || !isSameBus(s, cheapest))
                     .min(Comparator.comparingInt(s -> weightedDistance(departureTime(s), requestedTime)))
                     .orElse(null);
         }
+        if (closest == null) {
+            closest = cheapest;
+        }
 
-        if (cheapest != null) {
-            // 두 카드 요금이 같으면 "최저가"라는 이름이 거짓 차별점을 암시한다 — 실제로는 요청
-            // 시각(30분 이내)에 맞춰 고른 것뿐이므로, 그 경우엔 "가까운 시간"으로 정직하게 표시한다.
-            boolean tiedPrice = other != null && other.charge() == cheapest.charge();
-            if (tiedPrice) {
-                result.add(new BusRecommendation(cheapest, "요청하신 시간과 가장 가까운 버스입니다.", "가까운 시간"));
-            } else {
-                result.add(new BusRecommendation(cheapest, "가장 저렴한 버스입니다.", "최저가"));
-            }
-        }
-        if (other != null) {
-            result.add(new BusRecommendation(other, "비슷한 시간대의 추천 버스입니다.", "추천 시간"));
-        }
+        addCheapestAndClosest(result, cheapest, closest);
         return result;
+    }
+
+    /**
+     * 최저가/가까운 시간 카드를 만든다. 같은 버스(routeId+출발시각)가 둘 다 해당하면 카드 하나에
+     * 뱃지 2개를 붙이고, 다르면 카드 2개로 각각 보여준다.
+     */
+    private void addCheapestAndClosest(List<BusRecommendation> result, BusSchedule cheapest, BusSchedule closest) {
+        if (cheapest != null && closest != null && isSameBus(cheapest, closest)) {
+            result.add(new BusRecommendation(cheapest,
+                    "가장 저렴하면서 요청하신 시간과도 가장 가까운 버스입니다.",
+                    List.of("최저가", "가까운 시간")));
+            return;
+        }
+        if (cheapest != null) {
+            result.add(new BusRecommendation(cheapest, "가장 저렴한 버스입니다.", List.of("최저가")));
+        }
+        if (closest != null) {
+            result.add(new BusRecommendation(closest, "요청하신 시간과 가장 가까운 버스입니다.", List.of("가까운 시간")));
+        }
+    }
+
+    private boolean isSameBus(BusSchedule a, BusSchedule b) {
+        return a.routeId() != null && a.routeId().equals(b.routeId())
+                && a.departureTime() != null && a.departureTime().equals(b.departureTime());
     }
 
     private List<BusSchedule> withinMinutes(List<BusSchedule> schedules, LocalTime requestedTime, int maxMinutes) {
@@ -179,11 +182,6 @@ public class BusSearchService {
         int diffMinutes = (int) (departure.toSecondOfDay() - requestedTime.toSecondOfDay()) / 60;
         int penalty = diffMinutes < 0 ? EARLY_PENALTY_MINUTES : 0;
         return Math.abs(diffMinutes) + penalty;
-    }
-
-    private boolean isSameBus(BusSchedule a, BusSchedule b) {
-        return a.routeId() != null && a.routeId().equals(b.routeId())
-                && a.departureTime() != null && a.departureTime().equals(b.departureTime());
     }
 
     private Comparator<BusSchedule> scheduleComparator(BusSearchRequest request) {

@@ -102,10 +102,10 @@ export function BusPage() {
         appSay('죄송해요, 이미 조건에 맞는 가장 늦은 시간의 버스예요.')
       }
     } else if (text.includes('저렴') || text.includes('싼') || text.includes('싸')) {
-      const found = recommendations.find((r) => r.label.includes('최저가'))
+      const found = recommendations.find((r) => r.labels.some((l) => l.includes('최저가')))
       chooseBus((found ?? recommendations[0]).bus)
-    } else if (text.includes('빠른') || text.includes('이른') || text.includes('첫') || text.includes('추천')) {
-      const found = recommendations.find((r) => r.label.includes('추천'))
+    } else if (text.includes('빠른') || text.includes('이른') || text.includes('가까운')) {
+      const found = recommendations.find((r) => r.labels.some((l) => l.includes('가까운')))
       chooseBus((found ?? recommendations[0]).bus)
     } else if (text.includes('두') || text.includes('2')) {
       chooseBus((recommendations[1] ?? recommendations[0]).bus)
@@ -114,7 +114,7 @@ export function BusPage() {
     } else if (text.includes('첫') || text.includes('1')) {
       chooseBus(recommendations[0].bus)
     } else {
-      appSay('저렴한 것, 추천 시간, 또는 몇 번째인지 말씀해 주세요.')
+      appSay('저렴한 것, 가까운 시간, 또는 몇 번째인지 말씀해 주세요.')
     }
   }
 
@@ -150,19 +150,22 @@ export function BusPage() {
                 position: 'relative',
               }}
             >
-              {/* 라벨 뱃지 */}
-              <span style={{
-                display: 'inline-block',
-                background: '#f07f21',
-                color: '#fff',
-                fontSize: '0.85rem',
-                fontWeight: 700,
-                padding: '4px 12px',
-                borderRadius: '999px',
-                marginBottom: '8px',
-              }}>
-                {rec.label}
-              </span>
+              {/* 라벨 뱃지 — 같은 버스가 두 조건 모두 해당하면 뱃지가 2개 붙는다 */}
+              <div style={{ display: 'flex', gap: '6px', marginBottom: '8px' }}>
+                {rec.labels.map((label) => (
+                  <span key={label} style={{
+                    display: 'inline-block',
+                    background: '#f07f21',
+                    color: '#fff',
+                    fontSize: '0.85rem',
+                    fontWeight: 700,
+                    padding: '4px 12px',
+                    borderRadius: '999px',
+                  }}>
+                    {label}
+                  </span>
+                ))}
+              </div>
               <div style={{ fontSize: '1.2rem', fontWeight: 800, color: '#2b2320' }}>
                 {rec.bus.departure} → {rec.bus.arrival}
               </div>

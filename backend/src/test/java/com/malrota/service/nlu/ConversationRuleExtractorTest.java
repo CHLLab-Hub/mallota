@@ -25,12 +25,12 @@ class ConversationRuleExtractorTest {
         // 세션/LLM 폴백을 타다가 결국 출발지와 같은 "강릉"으로 도착지가 잘못 채워졌다. 근본 원인은
         // GENERIC_ARR_PATTERN의 탐욕적 캡처가 "서울" 대신 "서울로"(조사 포함)를 통째로 잡아버려서
         // 등록된 터미널명이 아니라고 거부(isPlausibleTerminal)해 버리는 것이었다. 터미널이 여럿이라
-        // 별칭에 등록되지 않은 5개 도시(서울/대구/대전/부산/광주) 전부에서 재현되므로 전부 확인한다.
+        // 별칭에 등록되지 않은 4개 도시(서울/대구/대전/부산) 전부에서 재현되므로 전부 확인한다.
+        // (광주는 이제 단일 터미널 도시라 "광주" 자체가 별칭으로 등록돼 있어 이 목록에서 빠졌다.)
         assertThat(extractor.extract("강릉에서 서울로 가는 버스 예매해줘", base).arrival()).isEqualTo("서울");
         assertThat(extractor.extract("천안에서 대구로 가는 버스", base).arrival()).isEqualTo("대구");
         assertThat(extractor.extract("천안에서 대전으로 가는 버스", base).arrival()).isEqualTo("대전");
         assertThat(extractor.extract("천안에서 부산으로 가는 버스", base).arrival()).isEqualTo("부산");
-        assertThat(extractor.extract("천안에서 광주로 가는 버스", base).arrival()).isEqualTo("광주");
     }
 
     @Test
@@ -182,10 +182,10 @@ class ConversationRuleExtractorTest {
 
     @Test
     void extracts_correction_terminal_after_malgo_even_when_the_rejected_part_is_mistranscribed() {
-        // 실제 보고된 사례: "대전청사 말고 대전종합으로", "선대 후 말고 동대구로"(STT가 "서대구"를
+        // 실제 보고된 사례: "대전청사 말고 대전터미널로", "선대 후 말고 동대구로"(STT가 "서대구"를
         // "선대 후"로 오인식)처럼 이미 확정한 터미널을 다른 터미널로 바꿔달라는 표현. "말고" 앞쪽이
         // 못 알아들을 말이어도(등록되지 않은 터미널이어도) "말고" 뒤의 원하는 터미널만 정확히 잡으면 된다.
-        assertThat(extractor.extract("대전 청사 말고 대전 종합으로 부탁해", base).correctionTerminal()).isEqualTo("대전복합");
+        assertThat(extractor.extract("대전 청사 말고 대전 터미널로 부탁해", base).correctionTerminal()).isEqualTo("대전복합");
         assertThat(extractor.extract("선대 후 말고 동대구로 부탁해", base).correctionTerminal()).isEqualTo("동대구");
     }
 

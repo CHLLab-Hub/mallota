@@ -192,14 +192,14 @@ class ConversationParseServiceTest {
 
     @Test
     void applies_departure_correction_when_user_rejects_the_already_confirmed_terminal() {
-        // 실제로 보고된 사고: 출발/도착 터미널이 이미 둘 다 확정된 뒤 "대전청사 말고 대전종합으로"처럼
+        // 실제로 보고된 사고: 출발/도착 터미널이 이미 둘 다 확정된 뒤 "대전청사 말고 대전터미널로"처럼
         // 정정했는데, 시스템이 정정을 무시하고 옛 터미널(대전청사)을 그대로 쓴 채 인원수를 물었다.
         ConversationSession session = new ConversationSession("s1");
         session.mergeConditions("대전청사", "서대구", "2026-08-28", null, "ANY", "ANY", "ANY",
                 1, session.getSeatPreferences(), session.getAccessibilityNeeds(), null);
 
         ConversationParseResponse r = service.parse(
-                new ConversationParseRequest("대전 청사 말고 대전 종합으로 부탁해", "s1"), session);
+                new ConversationParseRequest("대전 청사 말고 대전 터미널로 부탁해", "s1"), session);
 
         assertThat(r.departure()).isEqualTo("대전복합");
         assertThat(r.arrival()).isEqualTo("서대구");
