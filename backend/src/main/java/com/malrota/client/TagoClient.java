@@ -234,6 +234,17 @@ public class TagoClient {
         return terminalsInCity(city).size() > 1;
     }
 
+    /**
+     * 등록된 도시명이거나 등록된 터미널명/별칭으로 풀리는 지명인지 확인한다. 룰베이스 추출기와
+     * LLM 추출 결과 양쪽에서 "실제로 아는 지역인지" 판단 기준을 통일하기 위한 용도다 — 이 기준이
+     * 갈리면, 룰베이스가 미지원 지역으로 걸러낸 지명을 LLM이 아무 검증 없이 그대로 통과시켜 버리는
+     * 사고(예: "부산"을 "두산"으로 오인식했는데 LLM이 그 값을 그대로 반환해 노선 확인 단계까지
+     * 넘어가 버림)가 난다.
+     */
+    public static boolean isKnownRegion(String candidate) {
+        return isMultiTerminalCity(candidate) || resolveCanonicalName(candidate) != null;
+    }
+
     /** 등록된 모든 정식 터미널명 + 별칭 (정규식 생성용) */
     public static Set<String> allNamesAndAliases() {
         return TERMINAL_MAP.keySet();

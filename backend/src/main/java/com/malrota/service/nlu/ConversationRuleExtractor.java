@@ -310,7 +310,7 @@ public class ConversationRuleExtractor {
     }
 
     private boolean isPlausibleTerminal(String candidate) {
-        return TagoClient.isMultiTerminalCity(candidate) || TagoClient.resolveCanonicalName(candidate) != null;
+        return TagoClient.isKnownRegion(candidate);
     }
 
     /** 단독 지명 입력 처리 헬퍼 (TagoClient 연동) */

@@ -36,6 +36,26 @@ public class ConversationParseService {
      */
     private static final int MAX_BOOKABLE_DAYS_AHEAD = 2;
 
+    /**
+     * LLM에게 넘길, 우리가 실제로 아는 지역/터미널명 전체 목록 (프롬프트에 한 번 박아 넣을 수 있게
+     * 클래스 로딩 시 한 번만 만든다). LLM은 우리 TagoClient의 터미널 화이트리스트를 전혀 모르는
+     * 채로 "사용자가 말한 지역명"을 그대로 추출하므로, 이 목록 없이는 "부산"을 "두산"처럼 엉뚱하게
+     * 잘못 알아들은 STT 결과를 그럴듯한 다른 지명으로 "창작"해 버려도 걸러낼 방법이 없었다(실제로
+     * 보고된 사고). 목록을 주면 LLM이 발음이 비슷한 후보 중 실제로 존재하는 지명으로 교정을
+     * 시도할 수 있고, 그래도 목록에 없으면 지어내지 말고 null로 반환하라고 명시할 수 있다.
+     */
+    private static final String SUPPORTED_REGIONS_HINT = buildSupportedRegionsHint();
+
+    private static String buildSupportedRegionsHint() {
+        Set<String> regions = new LinkedHashSet<>(TagoClient.allCities());
+        regions.addAll(TagoClient.allNamesAndAliases());
+        return String.join(", ", regions);
+    }
+
+    /** LLM 추출 결과의 지역명이 실제로 아는 지역인지 확인 못 하는 경우를 대비한 허용 목록 검증에 쓰는, 룰베이스와 동일한 기준 */
+    private static final Set<String> KNOWN_ACCESSIBILITY_NEEDS = Set.of(
+            "WALKING_DIFFICULTY", "ELDERLY_CARE", "MOTION_SICKNESS", "PREGNANCY", "VISUAL_IMPAIRMENT");
+
     public ConversationParseService(WatsonxClient watsonxClient, ConversationRuleExtractor ruleExtractor,
                                      BusSearchService busSearchService) {
         this.watsonxClient = watsonxClient;
@@ -150,6 +170,42 @@ public class ConversationParseService {
         String intent = firstNonBlank(rules.intent(), value(llm, ConversationParseResponse::intent), "BUS_SEARCH");
         String departure = firstNonBlank(rules.departure(), sessionValue(session, ConversationSession::getDeparture), value(llm, ConversationParseResponse::departure));
         String arrival = firstNonBlank(rules.arrival(), sessionValue(session, ConversationSession::getArrival), value(llm, ConversationParseResponse::arrival));
+
+        // [LLM 추측 재검증] 룰베이스/세션에서 못 찾아 LLM의 추측을 최후 수단으로 쓸 때, LLM은
+        // TagoClient의 지원 지역 화이트리스트를 프롬프트로 안내받아도 강제로 지키는 게 아니라서
+        // 무시하고 엉뚱한 지명을 반환할 가능성이 남는다. 룰베이스가 미지원 지역을 걸러내는 것과
+        // 동일한 기준(TagoClient.isKnownRegion)으로 최종 값도 재검증해, LLM이 지어낸 지명이 그대로
+        // "확정된 노선"으로 취급되는 사고를 막는다 — 실제로 보고된 사고: "부산"을 "두산"으로
+        // 오인식했는데 LLM이 그 값을 그대로 반환해, 미지원 지역 안내 대신 노선 확인 단계까지
+        // 넘어가서 "노선을 찾지 못했다"는 오해의 소지가 있는 메시지가 나갔다.
+        String unrecognizedDeparture = rules.unrecognizedDeparture();
+        String unrecognizedArrival = rules.unrecognizedArrival();
+        if (!isBlank(departure) && !TagoClient.isKnownRegion(departure)) {
+            unrecognizedDeparture = departure;
+            departure = null;
+        }
+        if (!isBlank(arrival) && !TagoClient.isKnownRegion(arrival)) {
+            unrecognizedArrival = arrival;
+            arrival = null;
+        }
+
+        // [자기 자신으로의 노선 방지] 이번 발화에서 한쪽 슬롯(예: 도착지)만 언급됐는데, 룰베이스도
+        // 세션도 모르는 반대쪽 슬롯(출발지)을 LLM이 "최후 수단"으로 추측하면서 방금 채운 슬롯과
+        // 똑같은 지명을 그대로 되돌려주는 경우가 있다 — 실제로 보고된 사고: 사용자가 "부산으로
+        // 가고 싶어"라고 도착지만 말했는데 LLM이 출발지도 "부산"으로 추측해, 그 값이 세션에 그대로
+        // 저장돼(firstNonBlank가 이후 계속 세션을 최우선으로 신뢰하므로) 영구적으로 "부산에서
+        // 부산으로"라는 말이 안 되는 노선만 계속 조회하게 됐다. 이번 발화의 룰베이스도, 이전에
+        // 세션에 이미 있던 값도 아닌(=이번 턴에 LLM이 순전히 지어낸) 쪽만 무효화한다 — "서울"처럼
+        // 세션에 이미 있던 값이 우연히 양쪽 다 같은 경우(예: 서울↔서울, 서로 다른 세부 터미널로
+        // 각각 독립적으로 좁혀 나가는 정상 흐름)까지 건드리면 안 되기 때문이다.
+        if (departure != null && departure.equals(arrival)) {
+            boolean departureIsFreshLlmGuess = rules.departure() == null
+                    && isBlank(sessionValue(session, ConversationSession::getDeparture));
+            boolean arrivalIsFreshLlmGuess = rules.arrival() == null
+                    && isBlank(sessionValue(session, ConversationSession::getArrival));
+            if (departureIsFreshLlmGuess) departure = null;
+            else if (arrivalIsFreshLlmGuess) arrival = null;
+        }
 
         // [문맥 기반 단독 터미널명 매핑] "강남", "노포동" 등이 단독으로 들어왔을 때의 방향 결정.
         // 출발/도착이 둘 다 복수 터미널 도시라 동시에 애매한 경우(예: 서울→서울), 실제로 "지금
@@ -378,13 +434,18 @@ public class ConversationParseService {
         List<String> seatPreferences = noSeatPreferenceThisTurn ? List.of()
                 : mergePreferences(session == null ? List.of() : session.getSeatPreferences(),
                 llm == null ? null : llm.seatPreferences(), rules.seatPreferences(), rules.seatPreferenceMentioned());
+        // 룰베이스가 뽑는 accessibilityNeeds는 항상 KNOWN_ACCESSIBILITY_NEEDS 안의 값만 넣도록
+        // 고정돼 있지만, LLM은 프롬프트에 그 다섯 값만 쓰라고 안내받아도 강제되는 게 아니라서 다른
+        // 문구를 지어내 반환할 수 있다. departure/arrival과 같은 이유로, 화면에 정체불명의 값이
+        // 노출되거나 좌석 추천 로직이 알 수 없는 태그를 만나는 일이 없도록 여기서도 걸러낸다.
         List<String> accessibilityNeeds = mergePreferences(session == null ? List.of() : session.getAccessibilityNeeds(),
-                llm == null ? null : llm.accessibilityNeeds(), rules.accessibilityNeeds(), rules.accessibilityMentioned());
+                filterKnownAccessibilityNeeds(llm == null ? null : llm.accessibilityNeeds()),
+                rules.accessibilityNeeds(), rules.accessibilityMentioned());
 
         List<String> missing = missingRequired(departure, arrival, date, departureTime, servicePreference);
         String prompt = clarificationPrompt(missing, departure, arrival, passengers, passengerMentioned,
                 seatPreferenceMentioned, timePreference, rules.ambiguousMeridiem(), rules.ambiguousWeekend(),
-                rules.unrecognizedDeparture(), rules.unrecognizedArrival(), outOfRangeDate);
+                unrecognizedDeparture, unrecognizedArrival, outOfRangeDate);
 
         // 단독 터미널 답변("센트럴시티" 등)이 들어왔지만 지금 되묻고 있는 도시(예: 대전)와 다른
         // 도시(예: 서울) 터미널이라 어디에도 반영되지 못한 경우, "잘 못 알아들었어요"라는 애매한
@@ -511,6 +572,14 @@ public class ConversationParseService {
             if (result.isEmpty() && llmValues != null) addAll(result, llmValues);
         }
         return new ArrayList<>(result);
+    }
+
+    /** LLM이 지어낼 수 있는 미확정 accessibilityNeeds 값을 걸러내고, 실제로 정의된 다섯 개 값만 남긴다 */
+    private List<String> filterKnownAccessibilityNeeds(List<String> values) {
+        if (values == null) return null;
+        return values.stream()
+                .filter(v -> v != null && KNOWN_ACCESSIBILITY_NEEDS.contains(v.toUpperCase()))
+                .toList();
     }
 
     private void addAll(Set<String> target, List<String> values) {
@@ -696,10 +765,17 @@ public class ConversationParseService {
         - 이번 발화에서 규칙 기반으로 이미 정확히 인식된 값(참고용): %s
         - 직전에 사용자에게 물어본 질문(있다면): %s
 
+        [지원 지역 목록]
+        아래 목록에 있는 지명/터미널명만 실제로 서비스하는 지역입니다: %s
+
         [핵심 추출 규칙]
         0. "이번 발화에서 규칙 기반으로 이미 정확히 인식된 값"에 들어있는 필드는 이미 확실하니 그 값을 그대로 반환하세요.
            그 값을 무시하거나 다르게 바꾸면 안 됩니다. 이 JSON에 없는 필드만 아래 규칙에 따라 직접 판단하세요.
-        1. 지명/터미널: '~행'(부산행 등)은 arrival, '~발'(서울발 등)은 departure에 지명만 저장
+        1. 지명/터미널: '~행'(부산행 등)은 arrival, '~발'(서울발 등)은 departure에 지명만 저장.
+           음성 인식 오인식으로 [지원 지역 목록]에 없는 이름이 나왔다면, 발음이 비슷한 목록 안의
+           지명으로 교정해서 반환하세요(예: "두산"처럼 들렸지만 문맥상 "부산"일 가능성이 높으면
+           "부산"으로). 목록의 어떤 지명과도 비슷하지 않은 완전히 다른 지역이면 절대 목록 안의
+           지명으로 억지로 끼워 맞추지 말고 원문 그대로 반환하세요 — 서버가 미지원 지역으로 안내합니다.
         2. 날짜/시간: 기준시각 참고하여 절대날짜(YYYY-MM-DD) 변환. "첫차/시방/빨리"->servicePreference:"FIRST", "막차"->"LAST".
            이번 발화에 관련 언급이 전혀 없으면 기존 수집 정보의 값을 그대로 유지하고, 기존 정보에도 없으면 "ANY"를 반환하세요.
            ("ANY"는 사용자가 명시적으로 "아무거나 상관없다"고 말했거나, 정말 아무 정보도 없을 때만 사용합니다.)
@@ -799,7 +875,7 @@ public class ConversationParseService {
         직전에 사용자에게 물어본 질문(있다면): %s
         사용자: "%s"
         결과:
-        """.formatted(isoDateTime, currentStateJson, ruleHintsJson, previousQuestionText,
+        """.formatted(isoDateTime, currentStateJson, ruleHintsJson, previousQuestionText, SUPPORTED_REGIONS_HINT,
                 isoDateTime, currentStateJson, ruleHintsJson, previousQuestionText, text);
     }
 

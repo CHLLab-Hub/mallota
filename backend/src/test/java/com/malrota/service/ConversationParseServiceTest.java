@@ -846,6 +846,96 @@ class ConversationParseServiceTest {
         assertThat(result.clarificationPrompt()).contains("센트럴시티");
     }
 
+    // 실제로 보고된 사고 재현: STT가 "부산"을 "두산"으로 잘못 알아들었는데, 원문 자체가 어떤 지명
+    // 패턴에도 걸리지 않아 룰베이스는 아무 값도 못 뽑았다. 이때 LLM이 최후 수단으로 "두산"을 그대로
+    // arrival에 채워 넣으면, 화이트리스트 재검증 없이는 노선 확인 단계까지 넘어가 버린다.
+    private static class RegionGuessingWatsonxClient extends WatsonxClient {
+        RegionGuessingWatsonxClient() { super(null); }
+        @Override public boolean isConfigured() { return true; }
+        @Override public String ask(String prompt) {
+            return """
+                {"intent":"BUS_SEARCH","departure":"서울","arrival":"두산","date":null,
+                 "departureTime":null,"timePreference":"ANY","servicePreference":"ANY",
+                 "busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[]}
+                """;
+        }
+    }
+
+    @Test
+    void rejects_an_llm_guessed_arrival_that_is_not_a_known_region_instead_of_treating_it_as_confirmed() {
+        ConversationParseService serviceWithGuess = new ConversationParseService(
+                new RegionGuessingWatsonxClient(), new ConversationRuleExtractor(), alwaysHasRouteService());
+
+        ConversationParseResponse r = serviceWithGuess.parse(
+                new ConversationParseRequest("그냥 아무데나 예약해주세요", "s1"), new ConversationSession("s1"));
+
+        // LLM이 지어낸 미등록 지명("두산")은 확정된 도착지로 취급되면 안 된다.
+        assertThat(r.arrival()).isNull();
+        // "노선을 찾지 못했다"(routeNotFound)가 아니라 "미지원 지역" 안내가 나가야 한다 —
+        // 실제로는 존재하지도 않는 지명이라 노선 여부를 판단할 수 있는 대상 자체가 아니기 때문이다.
+        assertThat(r.routeNotFound()).isFalse();
+        assertThat(r.clarificationPrompt()).contains("두산").contains("지원하지 않는");
+        // 화이트리스트에 있는 LLM의 다른 추측("서울")은 그대로 신뢰돼야 한다.
+        assertThat(r.departure()).isEqualTo("서울");
+    }
+
+    // LLM이 accessibilityNeeds에 프롬프트가 정의하지 않은 값을 지어내는 상황을 흉내낸다.
+    private static class AccessibilityGuessingWatsonxClient extends WatsonxClient {
+        AccessibilityGuessingWatsonxClient() { super(null); }
+        @Override public boolean isConfigured() { return true; }
+        @Override public String ask(String prompt) {
+            return """
+                {"intent":"BUS_SEARCH","departure":null,"arrival":null,"date":null,
+                 "departureTime":null,"timePreference":"ANY","servicePreference":"ANY",
+                 "busGradePreference":"ANY","passengers":1,"seatPreferences":[],
+                 "accessibilityNeeds":["GHOST_NEED","MOTION_SICKNESS"]}
+                """;
+        }
+    }
+
+    @Test
+    void filters_out_an_unknown_accessibility_need_value_invented_by_the_llm() {
+        ConversationParseService serviceWithGuess = new ConversationParseService(
+                new AccessibilityGuessingWatsonxClient(), new ConversationRuleExtractor(), alwaysHasRouteService());
+
+        ConversationParseResponse r = serviceWithGuess.parse(
+                new ConversationParseRequest("그냥 아무데나 예약해주세요", "s1"), new ConversationSession("s1"));
+
+        assertThat(r.accessibilityNeeds()).contains("MOTION_SICKNESS");
+        assertThat(r.accessibilityNeeds()).doesNotContain("GHOST_NEED");
+    }
+
+    // 사용자가 도착지만 말했는데 LLM이 (룰베이스/세션 둘 다 모르는) 출발지를 방금 채운 도착지와
+    // 똑같이 추측해 돌려주는 상황을 흉내낸다.
+    private static class DuplicatingDestinationWatsonxClient extends WatsonxClient {
+        DuplicatingDestinationWatsonxClient() { super(null); }
+        @Override public boolean isConfigured() { return true; }
+        @Override public String ask(String prompt) {
+            return """
+                {"intent":"BUS_SEARCH","departure":"부산","arrival":"부산","date":null,
+                 "departureTime":null,"timePreference":"ANY","servicePreference":"ANY",
+                 "busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[]}
+                """;
+        }
+    }
+
+    @Test
+    void does_not_let_the_llm_invent_a_departure_that_duplicates_the_just_stated_arrival() {
+        // 실제로 보고된 사고: 사용자가 도착지("부산")만 말했는데, 룰베이스와 세션 둘 다 모르는
+        // 출발지를 LLM이 방금 채운 도착지와 똑같이 추측해서 "부산에서 부산으로"라는 말이 안 되는
+        // 노선이 세션에 고착돼, 매번 "노선이 없다"만 반복되고 정작 출발지를 물어보지 않았다.
+        ConversationParseService serviceWithGuess = new ConversationParseService(
+                new DuplicatingDestinationWatsonxClient(), new ConversationRuleExtractor(), alwaysHasRouteService());
+
+        ConversationParseResponse r = serviceWithGuess.parse(
+                new ConversationParseRequest("내일 부산으로 가고 싶어", "s1"), new ConversationSession("s1"));
+
+        assertThat(r.arrival()).isEqualTo("부산");
+        assertThat(r.departure()).isNull();
+        assertThat(r.routeNotFound()).isFalse();
+        assertThat(r.missingFields()).contains("departure");
+    }
+
     @Test
     void corrects_departure_expressed_only_as_bare_city_names_without_a_specific_terminal() {
         // 실제로 보고된 사고: "서울 말고 대구로 할께"처럼 세부 터미널 없이 도시명만으로 정정하면

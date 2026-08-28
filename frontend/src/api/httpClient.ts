@@ -46,6 +46,23 @@ function buildApiUrl(path: string) {
   return `${apiBaseUrl}/${path.replace(/^\/+/, '')}`
 }
 
+// AbortSignal.timeout은 비교적 최근에 추가된 API라, 이 앱의 대상인 고령자/디지털 취약계층이
+// 쓸 수 있는 오래된 브라우저나 저사양 기기의 구형 웹뷰에는 없을 수 있다. 없으면 매 요청마다
+// 여기서 곧바로 예외가 터져 fetch 자체가 시도되지도 않으므로(테스트 환경의 jsdom도 마찬가지로
+// 이 메서드가 없어서 매번 이 예외로 실패했다), AbortController + setTimeout으로 직접 구현한
+// 폴백을 둔다.
+function createTimeoutSignal(ms: number): AbortSignal | undefined {
+  if (typeof AbortSignal.timeout === 'function') {
+    return AbortSignal.timeout(ms)
+  }
+  if (typeof AbortController === 'undefined') {
+    return undefined
+  }
+  const controller = new AbortController()
+  setTimeout(() => controller.abort(), ms)
+  return controller.signal
+}
+
 function isFieldViolation(value: unknown): value is FieldViolation {
   if (!value || typeof value !== 'object') {
     return false
@@ -118,7 +135,7 @@ export async function request<T>(
 
   // 호출하는 쪽에서 signal을 직접 넘기지 않은 요청은 기본 30초 타임아웃을 건다. 안 그러면 서버가
   // 응답 없이 멈췄을 때(예: 음성 인식 API가 느려질 때) 화면이 "인식 중..."에서 영영 멈춰버린다.
-  const timeoutSignal = requestInit.signal ? undefined : AbortSignal.timeout(30_000)
+  const timeoutSignal = requestInit.signal ? undefined : createTimeoutSignal(30_000)
 
   try {
     response = await fetch(url, {
