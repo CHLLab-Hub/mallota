@@ -121,8 +121,15 @@ public class ConversationRuleExtractor {
         // 발화 전체가 등록된 터미널명/별칭 그 자체와 완전히 일치하는 경우("부산서부" 등 반문에 대한 단답)를 최우선으로 식별한다.
         // 완전 일치를 먼저 확인해 이 오인식을 원천 차단하고, 방향 배정은 세션 문맥을 아는 ConversationParseService에 맡긴다.
         String wholeInputAsTerminal = findStandaloneTerminal(input);
+        String compactInput = input.replaceAll("\\s+", "");
         boolean isStandaloneTerminalToken = wholeInputAsTerminal != null
-                && TagoClient.allNamesAndAliases().contains(input.replaceAll("\\s+", ""));
+                && TagoClient.allNamesAndAliases().contains(compactInput);
+        // 실제로 보고된 사고: "어디서 출발하시나요?"라는 질문에 세부 터미널 없이 도시명만
+        // ("서울", "대구") 단독으로 답하면 아무 반응도 없었다. "서울"/"대구"처럼 세부 터미널이
+        // 여럿인 도시명은 일부러 allNamesAndAliases()에 등록돼 있지 않아(세부 터미널을 반드시
+        // 되묻게 하려고 — TagoClient 참고) wholeInputAsTerminal이 항상 null이 되므로, 터미널명과는
+        // 별도로 도시명 목록에서 완전 일치를 확인해야 한다.
+        boolean isStandaloneCityToken = wholeInputAsTerminal == null && TagoClient.allCities().contains(compactInput);
 
         String arrival = null;
         String departure = null;
@@ -136,6 +143,8 @@ public class ConversationRuleExtractor {
 
         if (isStandaloneTerminalToken) {
             standalone = wholeInputAsTerminal;
+        } else if (isStandaloneCityToken) {
+            standalone = compactInput;
         } else {
             // "서울에서 대전으로" 같은 한 문장 출발+도착 구조를 개별 패턴보다 먼저 확인한다.
             Matcher routeMatcher = ROUTE_PATTERN.matcher(input);

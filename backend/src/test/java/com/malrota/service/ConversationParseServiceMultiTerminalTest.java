@@ -70,6 +70,26 @@ class ConversationParseServiceMultiTerminalTest {
     }
 
     @Test
+    void a_bare_ambiguous_city_name_answers_the_missing_departure_question_on_first_mention() {
+        // 실제로 보고된 사고: "혼자서 전주 갈려고"로 도착지(전주고속)와 인원(1명)만 정해진 뒤
+        // "출발 터미널을 말씀해 주세요"라는 질문에 세부 터미널 없이 도시명만("서울") 단독으로
+        // 답하면 아무 반응이 없었다. "서울"/"대구" 같은 도시명은 일부러 등록된 터미널
+        // 별칭 목록에 없어서(세부 터미널을 반드시 되묻기 위해) 기존 단독-터미널 인식 경로가
+        // 놓쳤다 — 도시명 목록에서도 완전 일치를 확인해야 한다.
+        ConversationSession session = new ConversationSession("s1");
+
+        ConversationParseResponse r1 = service.parse(new ConversationParseRequest("혼자서 전주 갈려고", "s1"), session);
+        assertThat(r1.arrival()).isEqualTo("전주고속");
+        assertThat(r1.clarificationPrompt()).contains("출발 터미널을 말씀해 주세요");
+        apply(session, r1);
+
+        ConversationParseResponse r2 = service.parse(new ConversationParseRequest("서울", "s1"), session);
+        assertThat(r2.departure()).isEqualTo("서울");
+        assertThat(r2.arrival()).isEqualTo("전주고속");
+        assertThat(r2.clarificationPrompt()).startsWith("서울 어느 터미널로");
+    }
+
+    @Test
     void resolves_the_same_ambiguous_city_used_for_both_directions_independently() {
         // 출발/도착이 우연히 같은 복수 터미널 도시(서울↔서울)인 극단적인 경우에도 서로 안 섞이는지.
         ConversationSession session = newSession("서울", "서울");
