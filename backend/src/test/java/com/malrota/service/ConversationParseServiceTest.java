@@ -645,6 +645,69 @@ class ConversationParseServiceTest {
         assertThat(r.correctedText()).isEqualTo("창가 쪽으로 주세요");
     }
 
+    // "서울경부"를 "서울 경구"/"서울 경국"처럼 마지막 음절을 잘못 알아듣는 STT 오인식 상황을
+    // 흉내낸다. LLM 자신의 departure 필드는 일부러 비워둬서, 실제로 반영되는 값이 LLM의 raw
+    // 구조화 필드 추측이 아니라 correctedText 기반 룰베이스 재추출 결과임을 검증한다.
+    private static class TerminalCorrectingWatsonxClient extends WatsonxClient {
+        TerminalCorrectingWatsonxClient() { super(null); }
+        @Override public boolean isConfigured() { return true; }
+        @Override public String ask(String prompt) {
+            return """
+                {"intent":"BUS_SEARCH","departure":null,"arrival":null,"date":null,
+                 "departureTime":null,"timePreference":"ANY","servicePreference":"ANY",
+                 "busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[],
+                 "correctedText":"서울경부에서 대전 가는 버스"}
+                """;
+        }
+    }
+
+    @Test
+    void still_recovers_a_mangled_terminal_name_via_llm_corrected_text_after_removing_raw_llm_guesses() {
+        // 출발/도착지에서 LLM의 raw 구조화 필드 추측을 제거했다고 해서, "서울 경구"/"서울 경국"처럼
+        // 끝 음절이 잘못 들린 터미널명을 correctedText로 통째 교정해 룰베이스가 다시 정확히
+        // 잡아내는 기존 STT 오인식 교정 경로까지 막히면 안 된다 — 이 둘은 서로 다른 메커니즘이다.
+        ConversationParseService serviceWithCorrection = new ConversationParseService(
+                new TerminalCorrectingWatsonxClient(), new ConversationRuleExtractor(), alwaysHasRouteService());
+
+        ConversationParseResponse r = serviceWithCorrection.parse(
+                new ConversationParseRequest("서울 경구에서 대전 가는 버스", "s1"), new ConversationSession("s1"));
+
+        assertThat(r.departure()).isEqualTo("서울경부");
+        assertThat(r.arrival()).isEqualTo("대전");
+        assertThat(r.correctedText()).isEqualTo("서울경부에서 대전 가는 버스");
+    }
+
+    // "부산"을 "두산"으로 잘못 알아듣는 STT 오인식(이전에 실제로 보고된 사고)을 correctedText로
+    // 교정하는 경우. "서울경부" 같은 구체적 터미널명뿐 아니라 "부산"처럼 세부 터미널이 여럿인
+    // 도시명 자체도 같은 방식(룰베이스 재추출)으로 교정되는지 확인한다.
+    private static class CityNameCorrectingWatsonxClient extends WatsonxClient {
+        CityNameCorrectingWatsonxClient() { super(null); }
+        @Override public boolean isConfigured() { return true; }
+        @Override public String ask(String prompt) {
+            return """
+                {"intent":"BUS_SEARCH","departure":null,"arrival":null,"date":null,
+                 "departureTime":null,"timePreference":"ANY","servicePreference":"ANY",
+                 "busGradePreference":"ANY","passengers":1,"seatPreferences":[],"accessibilityNeeds":[],
+                 "correctedText":"부산에서 대전 가는 버스"}
+                """;
+        }
+    }
+
+    @Test
+    void also_recovers_a_mangled_city_name_not_just_a_specific_terminal_via_llm_corrected_text() {
+        // 구체적 터미널명("서울경부")뿐 아니라 세부 터미널이 여럿인 도시명 자체("부산")도
+        // correctedText -> 룰베이스 재추출 경로로 똑같이 교정되는지 확인한다.
+        ConversationParseService serviceWithCorrection = new ConversationParseService(
+                new CityNameCorrectingWatsonxClient(), new ConversationRuleExtractor(), alwaysHasRouteService());
+
+        ConversationParseResponse r = serviceWithCorrection.parse(
+                new ConversationParseRequest("두산에서 대전 가는 버스", "s1"), new ConversationSession("s1"));
+
+        assertThat(r.departure()).isEqualTo("부산");
+        assertThat(r.arrival()).isEqualTo("대전");
+        assertThat(r.correctedText()).isEqualTo("부산에서 대전 가는 버스");
+    }
+
     @Test
     void leaves_corrected_text_null_when_the_llm_does_not_change_anything() {
         // 교정이 없었다면(원문 그대로) 프론트가 말풍선을 괜히 다시 그리지 않도록 null이어야 한다.
