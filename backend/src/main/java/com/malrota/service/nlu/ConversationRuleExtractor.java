@@ -32,7 +32,16 @@ public class ConversationRuleExtractor {
     private static final Pattern DEPARTURE_PATTERN = Pattern.compile("(?:출발(?:지)?[:\\s]*)?(" + TERMINALS + ")\\s*(?:에서|서|발)");
     // "으로"/"로" 조사는 받침 유무에 따라 형태가 다르다("천안고속으로", "동대구로") — "로"만 인정하면
     // 받침 있는 터미널명(예: "-고속"으로 끝나는 이름들) 뒤에 "으로"가 붙었을 때 매칭이 실패한다.
-    private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)|갈(?:려고|려는)?|도착|부탁))");
+    // "까지"도 목적지를 가리키는 흔한 조사라 함께 인정한다("대전까지 부탁드려요").
+    //
+    // "가줘"/"가주세요"/"데려다줘"/"내려주세요"처럼 부탁하는 말투는 실제로 아주 흔한데(특히
+    // 고령자), 원래 "가(?:요|는|자|고|려고|는데)"만으로는 "줘"/"주세요"류 어미를 전혀 못 잡았다
+    // (실사용 보고 사례). "가"뿐 아니라 "데려다"/"내려"/"태워다"까지 어간으로 함께 인정해
+    // "~에 내려주세요", "~로 데려다줘" 같은 표현도 도착지로 인식하게 한다.
+    private static final String ARRIVAL_ENDING =
+            "(?:행|(?:으로|로|에|까지)?\\s*(?:가(?:요|는|자|고|려고|려는|는데|야)|갈(?:려고|려는)?|"
+            + "(?:데려다|내려|태워다|가)\\s*(?:주세요|줘요|줘)|도착|부탁))";
+    private static final Pattern ARRIVAL_PATTERN = Pattern.compile("(" + TERMINALS + ")\\s*" + ARRIVAL_ENDING);
     // "서울에서 대전으로 가요"처럼 한 문장에 출발지와 도착지가 함께 있을 때는 각각 따로 잡는 것보다
     // 이 문장 구조를 우선한다. 두 도시가 같은 값으로 덮이는 사고를 막는다.
     private static final Pattern ROUTE_PATTERN = Pattern.compile(
@@ -63,7 +72,7 @@ public class ConversationRuleExtractor {
     // 말하면 도착지 어미로 전혀 인식되지 않았다. "가다"/"도착"과 대등한, 목적지를 말하는 흔한
     // 종결 표현이라 함께 인정한다.
     private static final Pattern GENERIC_ARR_PATTERN = Pattern.compile(
-            "([가-힣]{2,}?)\\s*(?:행|(?:으로|로|에)?\\s*(?:가(?:요|는|자|고|려고|는데)|갈(?:려고|려는)?|도착|부탁))(?![가-힣])");
+            "([가-힣]{2,}?)\\s*" + ARRIVAL_ENDING + "(?![가-힣])");
 
     // "혼자서"처럼 출발 문형("-서")과 우연히 겹치는 흔한 비지명 단어. GENERIC_DEP_PATTERN이 이런
     // 단어를 출발지 후보로 잡아버리면 "혼자서 서울 갈려고"에서 "혼자"가, "여기서 대전 가는 버스

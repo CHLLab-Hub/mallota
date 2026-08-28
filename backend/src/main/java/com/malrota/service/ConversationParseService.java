@@ -167,23 +167,50 @@ public class ConversationParseService {
         // 되돌려버리는 경우가 있었다. 그래서 LLM 결과를 세션보다 먼저 신뢰하면 이미 확정된 조건이
         // 아무 말도 안 했는데 갑자기 초기화되는 사고가 난다. LLM은 "룰베이스도 세션도 모르는" 첫 언급을
         // 보완하는 최후의 수단으로만 쓴다.
+        // LLM에게 "언급 없으면 기존 값을 그대로 복사하라"고 프롬프트에 명시했지만, 실제로는 지시를
+        // 놓치고 자기 나름의 기본값(예: 특정 터미널 "서울경부"를 도시명 "서울"로, 인원 2명을 1명으로)을
+        // 되돌려버리는 경우가 있었다. 그래서 LLM 결과를 세션보다 먼저 신뢰하면 이미 확정된 조건이
+        // 아무 말도 안 했는데 갑자기 초기화되는 사고가 난다. LLM은 "룰베이스도 세션도 모르는" 첫 언급을
+        // 보완하는 최후의 수단으로만 쓴다.
         String intent = firstNonBlank(rules.intent(), value(llm, ConversationParseResponse::intent), "BUS_SEARCH");
+        String departure = firstNonBlank(rules.departure(), sessionValue(session, ConversationSession::getDeparture), value(llm, ConversationParseResponse::departure));
+        String arrival = firstNonBlank(rules.arrival(), sessionValue(session, ConversationSession::getArrival), value(llm, ConversationParseResponse::arrival));
 
-        // [출발지/도착지는 LLM 최후 수단에서 제외] 원래 "룰베이스도 세션도 모르는 첫 언급을 LLM이
-        // 보완"하는 취지였지만, 실제로는 사용자가 그 슬롯을 아예 언급하지 않았는데도 LLM이 그럴듯한
-        // (때로는 지명조차 아닌) 값을 지어내 세션에 고착되는 사고가 반복됐다 — 실제로 보고된 사고들:
-        // (1) 도착지만 "부산"이라고 말했는데 LLM이 출발지도 "부산"으로 추측해 "부산에서 부산으로"라는
-        // 말이 안 되는 노선이 세션에 고착됨, (2) "서울로 가고 싶어"에서 "싶어"를 지명으로 착각해
-        // 출발지를 "싫어"로 추측함. 두 경우 모두 도착지("서울"/"부산")는 룰베이스가 이미 정확히
-        // 잡았는데, 출발지 쪽만 LLM이 근거 없이 채워 넣은 것이다. README의 원칙("출발지, 도착지,
-        // 날짜가 없으면 임의로 추정하지 않고 추가 질문한다")대로, 이 두 필드는 룰베이스나 세션에
-        // 없으면 LLM에 기대지 않고 정직하게 다시 물어본다. STT 오인식으로 룰베이스가 놓친 지명은
-        // 아래 STT 오인식 교정(correctedText → 룰베이스 재추출) 경로로 이미 커버되므로 기능 손실이
-        // 아니다.
-        String departure = firstNonBlank(rules.departure(), sessionValue(session, ConversationSession::getDeparture));
-        String arrival = firstNonBlank(rules.arrival(), sessionValue(session, ConversationSession::getArrival));
+        // [LLM 추측 재검증] 룰베이스/세션에서 못 찾아 LLM의 추측을 최후 수단으로 쓸 때, LLM은
+        // TagoClient의 지원 지역 화이트리스트를 프롬프트로 안내받아도 강제로 지키는 게 아니라서
+        // 무시하고 엉뚱한 지명을 반환할 가능성이 남는다. 룰베이스가 미지원 지역을 걸러내는 것과
+        // 동일한 기준(TagoClient.isKnownRegion)으로 최종 값도 재검증해, LLM이 지어낸 지명이 그대로
+        // "확정된 노선"으로 취급되는 사고를 막는다 — 실제로 보고된 사고: "부산"을 "두산"으로
+        // 오인식했는데 LLM이 그 값을 그대로 반환해, 미지원 지역 안내 대신 노선 확인 단계까지
+        // 넘어가서 "노선을 찾지 못했다"는 오해의 소지가 있는 메시지가 나갔다.
         String unrecognizedDeparture = rules.unrecognizedDeparture();
         String unrecognizedArrival = rules.unrecognizedArrival();
+        if (!isBlank(departure) && !TagoClient.isKnownRegion(departure)) {
+            unrecognizedDeparture = departure;
+            departure = null;
+        }
+        if (!isBlank(arrival) && !TagoClient.isKnownRegion(arrival)) {
+            unrecognizedArrival = arrival;
+            arrival = null;
+        }
+
+        // [자기 자신으로의 노선 방지] 이번 발화에서 한쪽 슬롯(예: 도착지)만 언급됐는데, 룰베이스도
+        // 세션도 모르는 반대쪽 슬롯(출발지)을 LLM이 "최후 수단"으로 추측하면서 방금 채운 슬롯과
+        // 똑같은 지명을 그대로 되돌려주는 경우가 있다 — 실제로 보고된 사고: 사용자가 "부산으로
+        // 가고 싶어"라고 도착지만 말했는데 LLM이 출발지도 "부산"으로 추측해, 그 값이 세션에 그대로
+        // 저장돼(firstNonBlank가 이후 계속 세션을 최우선으로 신뢰하므로) 영구적으로 "부산에서
+        // 부산으로"라는 말이 안 되는 노선만 계속 조회하게 됐다. 이번 발화의 룰베이스도, 이전에
+        // 세션에 이미 있던 값도 아닌(=이번 턴에 LLM이 순전히 지어낸) 쪽만 무효화한다 — "서울"처럼
+        // 세션에 이미 있던 값이 우연히 양쪽 다 같은 경우(예: 서울↔서울, 서로 다른 세부 터미널로
+        // 각각 독립적으로 좁혀 나가는 정상 흐름)까지 건드리면 안 되기 때문이다.
+        if (departure != null && departure.equals(arrival)) {
+            boolean departureIsFreshLlmGuess = rules.departure() == null
+                    && isBlank(sessionValue(session, ConversationSession::getDeparture));
+            boolean arrivalIsFreshLlmGuess = rules.arrival() == null
+                    && isBlank(sessionValue(session, ConversationSession::getArrival));
+            if (departureIsFreshLlmGuess) departure = null;
+            else if (arrivalIsFreshLlmGuess) arrival = null;
+        }
 
         // [문맥 기반 단독 터미널명 매핑] "강남", "노포동" 등이 단독으로 들어왔을 때의 방향 결정.
         // 출발/도착이 둘 다 복수 터미널 도시라 동시에 애매한 경우(예: 서울→서울), 실제로 "지금
