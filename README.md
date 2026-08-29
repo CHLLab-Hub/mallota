@@ -1,4 +1,4 @@
-# 말로타 (Malrota)
+# 말로타 (Mallota)
 
 말로 타는 고속버스. 고령자와 디지털 취약계층을 위한 음성 중심 고속버스 검색·좌석 추천 서비스입니다.
 
@@ -16,7 +16,7 @@ Node.js는 React 개발과 빌드에만 사용하며 별도의 Node.js 백엔드
 ## 저장소 구조
 
 ```text
-malrota/
+mallota/
 ├─ frontend/   React 웹 애플리케이션
 ├─ backend/    Spring Boot API 서버
 ├─ docs/       API 계약, 아키텍처, 데모 시나리오

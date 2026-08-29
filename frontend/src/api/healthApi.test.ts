@@ -21,13 +21,13 @@ describe('getHealth', () => {
       },
       json: jest.fn().mockResolvedValue({
         status: 'UP',
-        service: 'malrota-backend',
+        service: 'mallota-backend',
       }),
     } as unknown as Response)
 
     await expect(getHealth()).resolves.toEqual({
       status: 'UP',
-      service: 'malrota-backend',
+      service: 'mallota-backend',
     })
 
     expect(fetchMock).toHaveBeenCalledWith(

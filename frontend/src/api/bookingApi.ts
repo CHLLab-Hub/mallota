@@ -1,7 +1,7 @@
 import { request } from './httpClient'
 import type { Booking, BusSchedule } from '../features/conversation/types'
 
-const OWNER_ID_STORAGE_KEY = 'malrota-booking-owner-id'
+const OWNER_ID_STORAGE_KEY = 'mallota-booking-owner-id'
 let transientOwnerId: string | null = null
 
 /**

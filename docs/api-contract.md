@@ -31,7 +31,7 @@
 ```json
 {
   "status": "UP",
-  "service": "malrota-backend"
+  "service": "mallota-backend"
 }
 ```
 
