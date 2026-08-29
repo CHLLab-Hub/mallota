@@ -1,0 +1,14 @@
+{
+  "files": {
+    "main.css": "/mallota/static/css/main.1a0c8ab1.css",
+    "main.js": "/mallota/static/js/main.4c7b48ec.js",
+    "static/media/logo.png": "/mallota/static/media/logo.772c3d33e3e724dbb18f.png",
+    "index.html": "/mallota/index.html",
+    "main.1a0c8ab1.css.map": "/mallota/static/css/main.1a0c8ab1.css.map",
+    "main.4c7b48ec.js.map": "/mallota/static/js/main.4c7b48ec.js.map"
+  },
+  "entrypoints": [
+    "static/css/main.1a0c8ab1.css",
+    "static/js/main.4c7b48ec.js"
+  ]
+}
